@@ -6,6 +6,8 @@
 /Thread the Needle/[Bb]uilds/
 /Thread the Needle/[Ll]ogs/
 /Thread the Needle/[Uu]ser[Ss]ettings/
+/Thread the Needle/[Pp]ackages/*
+!/Thread the Needle/[Pp]ackages/*.json
 *.log
 
 # By default unity supports Blender asset imports, *.blend1 blender files do not need to be commited to version control.

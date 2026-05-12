@@ -8,6 +8,9 @@ public class Controller : MonoBehaviour
 	[SerializeField] Needle needle;
 
 	private float directionOffset;
+	private WrappedThreadPin currentPin;
+	private Vector2 currentWallNormal = Vector2.up;
+	private Vector2 currentContactPoint;
 	
 	enum GameState
 	{
@@ -25,37 +28,51 @@ public class Controller : MonoBehaviour
 		needle.stickEvent += HandleStickEvent;
 	}
 
-	private void HandleStickEvent()
+	private void HandleStickEvent(WrappedThreadPin _pin)
 	{
-		currentGameState = GameState.STUCK;
+		if (currentPin)
+			currentPin.Pin(_pin.transform);
+		
+		_pin.Needle(needle.transform);
+		currentPin = _pin;
+
+		currentWallNormal = needle.StuckWallNormal.sqrMagnitude > 0.0001f ? needle.StuckWallNormal.normalized : Vector2.up;
+		currentContactPoint = needle.StuckContactPoint;
+		
+		directionIndicator.StartDirectionMinigame(currentContactPoint, currentWallNormal);
+		currentGameState = GameState.DIRECTION_MINIGAME;
 	}
 	
 	private void OnJump(InputValue _value)
 	{
 		if (_value.isPressed)
 		{
-			if (currentGameState == GameState.STUCK)
+			switch (currentGameState)
 			{
-				directionIndicator.StartDirectionMinigame();
-				currentGameState = GameState.DIRECTION_MINIGAME;
-			}
-			else if (currentGameState == GameState.DIRECTION_MINIGAME)
-			{
-				directionOffset = directionIndicator.EndDirectionMinigame();
-				currentGameState = GameState.POWER_MINIGAME_START;
-			}
-			else if (currentGameState == GameState.POWER_MINIGAME_START)
-			{
-				powerIndicator.StartPowerMinigame();
-				currentGameState = GameState.POWER_MINIGAME_HOLD;
+				case GameState.DIRECTION_MINIGAME:
+					directionOffset = directionIndicator.EndDirectionMinigame();
+					currentGameState = GameState.POWER_MINIGAME_START;
+					break;
+				case GameState.POWER_MINIGAME_START:
+					powerIndicator.StartPowerMinigame(currentContactPoint, currentWallNormal);
+					currentGameState = GameState.POWER_MINIGAME_HOLD;
+					break;
 			}
 		}
 		else
 		{
-			if (currentGameState == GameState.POWER_MINIGAME_HOLD)
+			switch (currentGameState)
 			{
-				
-				currentGameState = GameState.MOVING;
+				case GameState.POWER_MINIGAME_HOLD:
+				{
+					float power = powerIndicator.EndPowerMinigame();
+					
+					Vector2 launchDirection = Quaternion.Euler(0f, 0f, directionOffset) * currentWallNormal;
+					needle.Launch(launchDirection, power);
+					
+					currentGameState = GameState.MOVING;
+					break;
+				}
 			}
 		}
 	}

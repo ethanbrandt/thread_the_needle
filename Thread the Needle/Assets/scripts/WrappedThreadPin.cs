@@ -1,0 +1,512 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+[RequireComponent(typeof(LineRenderer))]
+public class WrappedThreadPin : MonoBehaviour
+{
+	[SerializeField] Transform pinTarget;
+	[SerializeField] float needleEyeYOffest = 0.75f;
+	[SerializeField] LayerMask wallLayer;
+
+	[Header("Wrapping")]
+	[SerializeField] int maxWrapPoints = 16;
+	[SerializeField] float wrapPointPadding = 0.05f;
+	[SerializeField] float linecastEndpointPadding = 0.03f;
+
+	[Header("Rendering")]
+	[SerializeField] float visualSegmentLength = 0.15f;
+	[SerializeField] bool useSag = true;
+	[SerializeField] float sagPerUnit = 0.06f;
+	[SerializeField] float maxSag = 0.35f;
+	[SerializeField] float sagSmoothTime = 0.12f;
+	[SerializeField] int lineCornerVertices = 4;
+
+	[Header("Needle Arc")]
+	[SerializeField] int needleArcSamples = 5;
+	[SerializeField] float needleArcStrength = 0.35f;
+	[SerializeField] float needleArcReturnSpeed = 12f;
+	[SerializeField] float maxNeedleArcOffset = 0.5f;
+
+	public bool pinned;
+
+	private LineRenderer lineRenderer;
+	private ContactFilter2D wallFilter;
+
+	private readonly RaycastHit2D[] lineHits = new RaycastHit2D[8];
+	private readonly List<WrapPoint> wrapPoints = new List<WrapPoint>();
+	private readonly List<Vector2> controlPoints = new List<Vector2>();
+	private readonly List<Vector2> candidatePoints = new List<Vector2>();
+	private readonly List<Vector3> renderPositions = new List<Vector3>();
+	private readonly List<Vector2> spanSamples = new List<Vector2>();
+	private readonly List<float> currentSpanSags = new List<float>();
+	private readonly List<float> spanSagVelocities = new List<float>();
+	private Vector3[] renderBuffer = new Vector3[0];
+	private Vector2 previousStartAnchor;
+	private Vector2 needleArcOffset;
+	private bool hasPreviousStartAnchor;
+
+	private void Awake()
+	{
+		lineRenderer = GetComponent<LineRenderer>();
+		lineRenderer.numCornerVertices = Mathf.Max(lineRenderer.numCornerVertices, lineCornerVertices);
+
+		wallFilter = new ContactFilter2D();
+		wallFilter.SetLayerMask(wallLayer);
+		wallFilter.useTriggers = false;
+	}
+
+	private void LateUpdate()
+	{
+		if (pinTarget == null)
+		{
+			lineRenderer.positionCount = 0;
+			return;
+		}
+
+		Vector2 startAnchor = GetStartAnchor();
+		Vector2 endAnchor = transform.position;
+
+		UpdateNeedleArc(startAnchor);
+		UpdateWrapTopology(startAnchor, endAnchor);
+		BuildRenderPositions(startAnchor, endAnchor);
+
+		lineRenderer.positionCount = renderPositions.Count;
+		EnsureRenderBufferSize(renderPositions.Count);
+		for (int i = 0; i < renderPositions.Count; i++)
+			renderBuffer[i] = renderPositions[i];
+		lineRenderer.SetPositions(renderBuffer);
+	}
+
+	private Vector2 GetStartAnchor()
+	{
+		if (pinned)
+			return pinTarget.position;
+
+		return pinTarget.position + pinTarget.up * needleEyeYOffest;
+	}
+
+	private void UpdateNeedleArc(Vector2 startAnchor)
+	{
+		if (!hasPreviousStartAnchor)
+		{
+			previousStartAnchor = startAnchor;
+			hasPreviousStartAnchor = true;
+			return;
+		}
+
+		Vector2 anchorDelta = startAnchor - previousStartAnchor;
+		previousStartAnchor = startAnchor;
+
+		if (!pinned)
+			needleArcOffset -= anchorDelta * needleArcStrength;
+
+		float maxOffsetSqr = maxNeedleArcOffset * maxNeedleArcOffset;
+		if (needleArcOffset.sqrMagnitude > maxOffsetSqr)
+			needleArcOffset = needleArcOffset.normalized * maxNeedleArcOffset;
+
+		float decay = 1f - Mathf.Exp(-needleArcReturnSpeed * Time.deltaTime);
+		needleArcOffset = Vector2.Lerp(needleArcOffset, Vector2.zero, decay);
+	}
+
+	private void UpdateWrapTopology(Vector2 startAnchor, Vector2 endAnchor)
+	{
+		RemoveUnneededWrapPoints(startAnchor, endAnchor);
+
+		for (int iteration = 0; iteration < maxWrapPoints; iteration++)
+		{
+			BuildControlPoints(startAnchor, endAnchor);
+
+			bool addedWrapPoint = false;
+			for (int i = 0; i < controlPoints.Count - 1; i++)
+			{
+				Vector2 from = controlPoints[i];
+				Vector2 to = controlPoints[i + 1];
+
+				if (!TryGetBlockingHit(from, to, out RaycastHit2D hit))
+					continue;
+
+				if (!TryCreateWrapPoint(hit, from, to, out WrapPoint wrapPoint))
+				{
+					Vector2 fallbackPoint = hit.point + hit.normal * wrapPointPadding;
+					wrapPoints.Insert(i, new WrapPoint(fallbackPoint, hit.collider));
+					addedWrapPoint = true;
+					break;
+				}
+
+				wrapPoints.Insert(i, wrapPoint);
+				addedWrapPoint = true;
+				break;
+			}
+
+			if (!addedWrapPoint)
+				return;
+		}
+	}
+
+	private void RemoveUnneededWrapPoints(Vector2 startAnchor, Vector2 endAnchor)
+	{
+		for (int i = wrapPoints.Count - 1; i >= 0; i--)
+		{
+			Vector2 previous = i == 0 ? startAnchor : wrapPoints[i - 1].position;
+			Vector2 next = i == wrapPoints.Count - 1 ? endAnchor : wrapPoints[i + 1].position;
+
+			if (HasLineOfSight(previous, next))
+				wrapPoints.RemoveAt(i);
+		}
+	}
+
+	private void BuildControlPoints(Vector2 startAnchor, Vector2 endAnchor)
+	{
+		controlPoints.Clear();
+		controlPoints.Add(startAnchor);
+
+		for (int i = 0; i < wrapPoints.Count; i++)
+			controlPoints.Add(wrapPoints[i].position);
+
+		controlPoints.Add(endAnchor);
+	}
+
+	private bool TryCreateWrapPoint(RaycastHit2D hit, Vector2 from, Vector2 to, out WrapPoint wrapPoint)
+	{
+		wrapPoint = default;
+
+		BuildColliderCandidates(hit.collider);
+		if (candidatePoints.Count == 0)
+			return false;
+
+		bool foundFullPathCandidate = false;
+		bool foundPartialCandidate = false;
+		float bestFullPathScore = float.PositiveInfinity;
+		float bestPartialScore = float.PositiveInfinity;
+		Vector2 bestFullPathPoint = Vector2.zero;
+		Vector2 bestPartialPoint = Vector2.zero;
+
+		for (int i = 0; i < candidatePoints.Count; i++)
+		{
+			Vector2 candidate = candidatePoints[i];
+			if (IsDuplicateWrapPoint(candidate))
+				continue;
+
+			if (!HasLineOfSight(from, candidate))
+				continue;
+
+			float score = Vector2.Distance(from, candidate) + Vector2.Distance(candidate, to);
+
+			if (HasLineOfSight(candidate, to))
+			{
+				if (score < bestFullPathScore)
+				{
+					foundFullPathCandidate = true;
+					bestFullPathScore = score;
+					bestFullPathPoint = candidate;
+				}
+			}
+			else if (score < bestPartialScore)
+			{
+				foundPartialCandidate = true;
+				bestPartialScore = score;
+				bestPartialPoint = candidate;
+			}
+		}
+
+		if (foundFullPathCandidate)
+		{
+			wrapPoint = new WrapPoint(bestFullPathPoint, hit.collider);
+			return true;
+		}
+
+		if (foundPartialCandidate)
+		{
+			wrapPoint = new WrapPoint(bestPartialPoint, hit.collider);
+			return true;
+		}
+
+		return false;
+	}
+
+	private void BuildColliderCandidates(Collider2D collider)
+	{
+		candidatePoints.Clear();
+
+		if (collider is BoxCollider2D boxCollider)
+		{
+			AddBoxColliderCorners(boxCollider);
+			return;
+		}
+
+		if (collider is PolygonCollider2D polygonCollider)
+		{
+			AddPolygonColliderCorners(polygonCollider);
+			return;
+		}
+
+		AddBoundsCorners(collider.bounds);
+	}
+
+	private void AddBoxColliderCorners(BoxCollider2D boxCollider)
+	{
+		Vector2 center = boxCollider.offset;
+		Vector2 halfSize = boxCollider.size * 0.5f;
+
+		AddPaddedColliderPoint(boxCollider, center + new Vector2(-halfSize.x, -halfSize.y));
+		AddPaddedColliderPoint(boxCollider, center + new Vector2(-halfSize.x, halfSize.y));
+		AddPaddedColliderPoint(boxCollider, center + new Vector2(halfSize.x, halfSize.y));
+		AddPaddedColliderPoint(boxCollider, center + new Vector2(halfSize.x, -halfSize.y));
+	}
+
+	private void AddPolygonColliderCorners(PolygonCollider2D polygonCollider)
+	{
+		for (int pathIndex = 0; pathIndex < polygonCollider.pathCount; pathIndex++)
+		{
+			Vector2[] path = polygonCollider.GetPath(pathIndex);
+			for (int i = 0; i < path.Length; i++)
+				AddPaddedColliderPoint(polygonCollider, polygonCollider.offset + path[i]);
+		}
+	}
+
+	private void AddBoundsCorners(Bounds bounds)
+	{
+		Vector2 min = bounds.min;
+		Vector2 max = bounds.max;
+
+		AddPaddedWorldPoint(bounds.center, new Vector2(min.x, min.y));
+		AddPaddedWorldPoint(bounds.center, new Vector2(min.x, max.y));
+		AddPaddedWorldPoint(bounds.center, new Vector2(max.x, max.y));
+		AddPaddedWorldPoint(bounds.center, new Vector2(max.x, min.y));
+	}
+
+	private void AddPaddedColliderPoint(Collider2D collider, Vector2 localPoint)
+	{
+		Vector2 worldPoint = collider.transform.TransformPoint(localPoint);
+		AddPaddedWorldPoint(collider.bounds.center, worldPoint);
+	}
+
+	private void AddPaddedWorldPoint(Vector2 center, Vector2 worldPoint)
+	{
+		Vector2 awayFromCollider = worldPoint - center;
+		if (awayFromCollider.sqrMagnitude < 0.0001f)
+			awayFromCollider = Vector2.up;
+
+		candidatePoints.Add(worldPoint + awayFromCollider.normalized * wrapPointPadding);
+	}
+
+	private bool IsDuplicateWrapPoint(Vector2 candidate)
+	{
+		float minDistance = wrapPointPadding * 2f;
+		float minDistanceSqr = minDistance * minDistance;
+
+		for (int i = 0; i < wrapPoints.Count; i++)
+		{
+			if ((wrapPoints[i].position - candidate).sqrMagnitude <= minDistanceSqr)
+				return true;
+		}
+
+		return false;
+	}
+
+	private bool HasLineOfSight(Vector2 from, Vector2 to)
+	{
+		return !TryGetBlockingHit(from, to, out _);
+	}
+
+	private bool TryGetBlockingHit(Vector2 from, Vector2 to, out RaycastHit2D blockingHit)
+	{
+		blockingHit = default;
+
+		Vector2 delta = to - from;
+		float distance = delta.magnitude;
+		if (distance <= 0.0001f)
+			return false;
+
+		int hitCount = Physics2D.Linecast(from, to, wallFilter, lineHits);
+		float bestFraction = float.PositiveInfinity;
+
+		for (int i = 0; i < hitCount; i++)
+		{
+			RaycastHit2D hit = lineHits[i];
+			if (hit.collider == null)
+				continue;
+
+			float endpointPadding = Mathf.Clamp01(linecastEndpointPadding / distance);
+			if (hit.fraction <= endpointPadding || hit.fraction >= 1f - endpointPadding)
+				continue;
+
+			if (hit.fraction < bestFraction)
+			{
+				bestFraction = hit.fraction;
+				blockingHit = hit;
+			}
+		}
+
+		return blockingHit.collider != null;
+	}
+
+	private void BuildRenderPositions(Vector2 startAnchor, Vector2 endAnchor)
+	{
+		renderPositions.Clear();
+		BuildControlPoints(startAnchor, endAnchor);
+		EnsureSagState(controlPoints.Count - 1);
+
+		for (int i = 0; i < controlPoints.Count - 1; i++)
+		{
+			Vector2 from = controlPoints[i];
+			Vector2 to = controlPoints[i + 1];
+			AddRenderSpan(from, to, i == 0, i);
+		}
+	}
+
+	private void EnsureRenderBufferSize(int size)
+	{
+		if (renderBuffer.Length != size)
+			renderBuffer = new Vector3[size];
+	}
+
+	private void EnsureSagState(int spanCount)
+	{
+		while (currentSpanSags.Count < spanCount)
+		{
+			currentSpanSags.Add(0f);
+			spanSagVelocities.Add(0f);
+		}
+
+		while (currentSpanSags.Count > spanCount)
+		{
+			int lastIndex = currentSpanSags.Count - 1;
+			currentSpanSags.RemoveAt(lastIndex);
+			spanSagVelocities.RemoveAt(lastIndex);
+		}
+	}
+
+	private void AddRenderSpan(Vector2 from, Vector2 to, bool includeStart, int spanIndex)
+	{
+		float distance = Vector2.Distance(from, to);
+		int sampleCount = Mathf.Max(1, Mathf.CeilToInt(distance / Mathf.Max(visualSegmentLength, 0.01f)));
+		bool canUseNeedleArc = CanUseNeedleArc(spanIndex, distance);
+		float sagAmount = useSag ? GetSmoothedSagAmount(distance, spanIndex) : 0f;
+
+		if (includeStart)
+			renderPositions.Add(from);
+
+		if (useSag && TryBuildSpan(from, to, sampleCount, spanIndex, sagAmount, canUseNeedleArc))
+		{
+			for (int i = 0; i < spanSamples.Count; i++)
+				renderPositions.Add(spanSamples[i]);
+
+			return;
+		}
+
+		if (useSag && canUseNeedleArc && TryBuildSpan(from, to, sampleCount, spanIndex, sagAmount, false))
+		{
+			for (int i = 0; i < spanSamples.Count; i++)
+				renderPositions.Add(spanSamples[i]);
+
+			return;
+		}
+
+		if (!useSag && canUseNeedleArc && TryBuildSpan(from, to, sampleCount, spanIndex, 0f, true))
+		{
+			for (int i = 0; i < spanSamples.Count; i++)
+				renderPositions.Add(spanSamples[i]);
+
+			return;
+		}
+
+		AddStraightSpan(from, to, sampleCount);
+	}
+
+	private float GetSmoothedSagAmount(float spanDistance, int spanIndex)
+	{
+		float targetSag = Mathf.Min(maxSag, spanDistance * sagPerUnit);
+		float sagVelocity = spanSagVelocities[spanIndex];
+		currentSpanSags[spanIndex] = Mathf.SmoothDamp(
+			currentSpanSags[spanIndex],
+			targetSag,
+			ref sagVelocity,
+			sagSmoothTime
+		);
+		spanSagVelocities[spanIndex] = sagVelocity;
+
+		return currentSpanSags[spanIndex];
+	}
+
+	private bool TryBuildSpan(Vector2 from, Vector2 to, int sampleCount, int spanIndex, float sagAmount, bool applyNeedleArc)
+	{
+		spanSamples.Clear();
+
+		Vector2 previous = from;
+
+		for (int i = 1; i <= sampleCount; i++)
+		{
+			float t = i / (float)sampleCount;
+			Vector2 sample = Vector2.Lerp(from, to, t);
+			sample += Vector2.down * (Mathf.Sin(t * Mathf.PI) * sagAmount);
+			if (applyNeedleArc)
+				sample += needleArcOffset * GetNeedleArcFalloff(t, from, to);
+
+			if (!HasLineOfSight(previous, sample))
+				return false;
+
+			spanSamples.Add(sample);
+			previous = sample;
+		}
+
+		return true;
+	}
+
+	private void AddStraightSpan(Vector2 from, Vector2 to, int sampleCount)
+	{
+		for (int i = 1; i <= sampleCount; i++)
+			renderPositions.Add(Vector2.Lerp(from, to, i / (float)sampleCount));
+	}
+
+	private bool CanUseNeedleArc(int spanIndex, float spanDistance)
+	{
+		return !pinned &&
+			spanIndex == 0 &&
+			needleArcSamples > 0 &&
+			spanDistance > 0.0001f &&
+			needleArcOffset.sqrMagnitude >= 0.0001f;
+	}
+
+	private float GetNeedleArcFalloff(float t, Vector2 from, Vector2 to)
+	{
+		float spanDistance = Vector2.Distance(from, to);
+		float arcReach = Mathf.Clamp01((needleArcSamples * Mathf.Max(visualSegmentLength, 0.01f)) / spanDistance);
+		if (arcReach <= 0.0001f || t > arcReach)
+			return 0f;
+
+		float localT = Mathf.Clamp01(t / arcReach);
+		float easeIn = Mathf.SmoothStep(0f, 1f, localT);
+		float easeOut = 1f - Mathf.SmoothStep(0f, 1f, localT);
+
+		return easeIn * easeOut * 4f;
+	}
+
+	public void Pin(Transform newPinTarget)
+	{
+		pinTarget = newPinTarget;
+		pinned = true;
+		hasPreviousStartAnchor = false;
+	}
+
+	public void Needle(Transform needle)
+	{
+		pinTarget = needle;
+		pinned = false;
+		needleArcOffset = Vector2.zero;
+		hasPreviousStartAnchor = false;
+		wrapPoints.Clear();
+	}
+
+	private readonly struct WrapPoint
+	{
+		public readonly Vector2 position;
+		public readonly Collider2D collider;
+
+		public WrapPoint(Vector2 position, Collider2D collider)
+		{
+			this.position = position;
+			this.collider = collider;
+		}
+	}
+}
