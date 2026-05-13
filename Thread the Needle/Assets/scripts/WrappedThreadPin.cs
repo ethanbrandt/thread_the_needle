@@ -1,19 +1,26 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 [RequireComponent(typeof(LineRenderer))]
 public class WrappedThreadPin : MonoBehaviour
 {
-	[SerializeField] Transform pinTarget;
-	[SerializeField] float needleEyeYOffest = 0.75f;
-	[SerializeField] LayerMask wallLayer;
+	[Header("Cutting")]
+	[SerializeField] LayerMask hazardLayer;
+	[SerializeField] float cutFallGravity = 6f;
+	[SerializeField] float cutSeparationImpulse = 0.15f;
+	[SerializeField] float cutDamping = 0.96f;
+	[SerializeField] int cutConstraintIterations = 3;
+	[SerializeField] float cutEndOffset = 0.03f;
 
 	[Header("Wrapping")]
+	[SerializeField] LayerMask wallLayer;
 	[SerializeField] int maxWrapPoints = 16;
 	[SerializeField] float wrapPointPadding = 0.05f;
 	[SerializeField] float linecastEndpointPadding = 0.03f;
 
 	[Header("Rendering")]
+	[SerializeField] float needleEyeYOffset = 0.75f;
 	[SerializeField] float visualSegmentLength = 0.15f;
 	[SerializeField] bool useSag = true;
 	[SerializeField] float sagPerUnit = 0.06f;
@@ -27,12 +34,18 @@ public class WrappedThreadPin : MonoBehaviour
 	[SerializeField] float needleArcReturnSpeed = 12f;
 	[SerializeField] float maxNeedleArcOffset = 0.5f;
 
+	public static Action<bool> CutEvent;
+	
+	private Transform pinTarget;
 	public bool pinned;
 
 	private LineRenderer lineRenderer;
+	private LineRenderer looseRenderer;
 	private ContactFilter2D wallFilter;
+	private ContactFilter2D hazardFilter;
 
 	private readonly RaycastHit2D[] lineHits = new RaycastHit2D[8];
+	private readonly RaycastHit2D[] hazardHits = new RaycastHit2D[4];
 	private readonly List<WrapPoint> wrapPoints = new List<WrapPoint>();
 	private readonly List<Vector2> controlPoints = new List<Vector2>();
 	private readonly List<Vector2> candidatePoints = new List<Vector2>();
@@ -41,18 +54,52 @@ public class WrappedThreadPin : MonoBehaviour
 	private readonly List<float> currentSpanSags = new List<float>();
 	private readonly List<float> spanSagVelocities = new List<float>();
 	private Vector3[] renderBuffer = new Vector3[0];
+	private Vector3[] looseRenderBuffer = new Vector3[0];
 	private Vector2 previousStartAnchor;
 	private Vector2 needleArcOffset;
 	private bool hasPreviousStartAnchor;
+	private bool cut;
+	private CutPiece startPiece;
+	private CutPiece endPiece;
+
+	private static int sortingOrder = 10;
 
 	private void Awake()
 	{
 		lineRenderer = GetComponent<LineRenderer>();
 		lineRenderer.numCornerVertices = Mathf.Max(lineRenderer.numCornerVertices, lineCornerVertices);
-
+		lineRenderer.sortingOrder = sortingOrder;
+		sortingOrder++;
+		looseRenderer = CreateLooseRenderer();
+		
 		wallFilter = new ContactFilter2D();
 		wallFilter.SetLayerMask(wallLayer);
 		wallFilter.useTriggers = false;
+
+		hazardFilter = new ContactFilter2D();
+		hazardFilter.SetLayerMask(hazardLayer);
+		hazardFilter.useTriggers = true;
+	}
+
+	private LineRenderer CreateLooseRenderer()
+	{
+		GameObject looseObject = new GameObject("Cut Rope Piece");
+		looseObject.transform.SetParent(transform, false);
+
+		LineRenderer renderer = looseObject.AddComponent<LineRenderer>();
+		renderer.useWorldSpace = lineRenderer.useWorldSpace;
+		renderer.sharedMaterial = lineRenderer.sharedMaterial;
+		renderer.widthMultiplier = lineRenderer.widthMultiplier;
+		renderer.widthCurve = lineRenderer.widthCurve;
+		renderer.colorGradient = lineRenderer.colorGradient;
+		renderer.numCornerVertices = lineRenderer.numCornerVertices;
+		renderer.numCapVertices = lineRenderer.numCapVertices;
+		renderer.textureMode = lineRenderer.textureMode;
+		renderer.sortingLayerID = lineRenderer.sortingLayerID;
+		renderer.sortingOrder = lineRenderer.sortingOrder + 1;
+		renderer.enabled = false;
+
+		return renderer;
 	}
 
 	private void LateUpdate()
@@ -60,6 +107,14 @@ public class WrappedThreadPin : MonoBehaviour
 		if (pinTarget == null)
 		{
 			lineRenderer.positionCount = 0;
+			looseRenderer.positionCount = 0;
+			return;
+		}
+
+		if (cut)
+		{
+			UpdateCutPieces();
+			RenderCutPieces();
 			return;
 		}
 
@@ -70,6 +125,13 @@ public class WrappedThreadPin : MonoBehaviour
 		UpdateWrapTopology(startAnchor, endAnchor);
 		BuildRenderPositions(startAnchor, endAnchor);
 
+		if (TryCutFromHazard())
+		{
+			UpdateCutPieces();
+			RenderCutPieces();
+			return;
+		}
+
 		lineRenderer.positionCount = renderPositions.Count;
 		EnsureRenderBufferSize(renderPositions.Count);
 		for (int i = 0; i < renderPositions.Count; i++)
@@ -77,12 +139,103 @@ public class WrappedThreadPin : MonoBehaviour
 		lineRenderer.SetPositions(renderBuffer);
 	}
 
+	private bool TryCutFromHazard()
+	{
+		for (int i = 0; i < renderPositions.Count - 1; i++)
+		{
+			Vector2 from = renderPositions[i];
+			Vector2 to = renderPositions[i + 1];
+
+			int hitCount = Physics2D.Linecast(from, to, hazardFilter, hazardHits);
+			if (hitCount <= 0)
+				continue;
+
+			RaycastHit2D hit = hazardHits[0];
+			for (int hitIndex = 1; hitIndex < hitCount; hitIndex++)
+			{
+				if (hazardHits[hitIndex].fraction < hit.fraction)
+					hit = hazardHits[hitIndex];
+			}
+
+			CutAt(i, hit.point);
+			return true;
+		}
+
+		return false;
+	}
+
+	private void CutAt(int segmentIndex, Vector2 cutPoint)
+	{
+		Vector2 segmentStart = renderPositions[segmentIndex];
+		Vector2 segmentEnd = renderPositions[segmentIndex + 1];
+		Vector2 tangent = segmentEnd - segmentStart;
+		if (tangent.sqrMagnitude < 0.0001f)
+			tangent = Vector2.right;
+		tangent.Normalize();
+
+		Vector2 normal = Vector2.Perpendicular(tangent);
+
+		startPiece = new CutPiece(true, false);
+		for (int i = 0; i <= segmentIndex; i++)
+			startPiece.Add(renderPositions[i]);
+		startPiece.Add(cutPoint + normal * cutEndOffset);
+
+		endPiece = new CutPiece(false, true);
+		endPiece.Add(cutPoint - normal * cutEndOffset);
+		for (int i = segmentIndex + 1; i < renderPositions.Count; i++)
+			endPiece.Add(renderPositions[i]);
+
+		startPiece.KickEnd(normal * cutSeparationImpulse);
+		endPiece.KickStart(-normal * cutSeparationImpulse);
+
+		cut = true;
+		looseRenderer.enabled = true;
+		looseRenderer.colorGradient = lineRenderer.colorGradient;
+		needleArcOffset = Vector2.zero;
+		
+		CutEvent?.Invoke(!pinned);
+	}
+
+	private void UpdateCutPieces()
+	{
+		float dt = Mathf.Min(Time.deltaTime, 0.033f);
+		Vector2 acceleration = Vector2.down * cutFallGravity;
+
+		startPiece.SetStartAnchor(GetStartAnchor());
+		endPiece.SetEndAnchor(transform.position);
+
+		startPiece.Simulate(acceleration, cutDamping, dt, cutConstraintIterations);
+		endPiece.Simulate(acceleration, cutDamping, dt, cutConstraintIterations);
+	}
+
+	private void RenderCutPieces()
+	{
+		RenderCutPiece(lineRenderer, startPiece, ref renderBuffer);
+		RenderCutPiece(looseRenderer, endPiece, ref looseRenderBuffer);
+	}
+
+	private void RenderCutPiece(LineRenderer renderer, CutPiece piece, ref Vector3[] buffer)
+	{
+		if (piece == null || piece.Count == 0)
+		{
+			renderer.positionCount = 0;
+			return;
+		}
+
+		if (buffer.Length != piece.Count)
+			buffer = new Vector3[piece.Count];
+
+		piece.CopyPositions(buffer);
+		renderer.positionCount = piece.Count;
+		renderer.SetPositions(buffer);
+	}
+
 	private Vector2 GetStartAnchor()
 	{
 		if (pinned)
 			return pinTarget.position;
 
-		return pinTarget.position + pinTarget.up * needleEyeYOffest;
+		return pinTarget.position + pinTarget.up * needleEyeYOffset;
 	}
 
 	private void UpdateNeedleArc(Vector2 startAnchor)
@@ -496,6 +649,171 @@ public class WrappedThreadPin : MonoBehaviour
 		needleArcOffset = Vector2.zero;
 		hasPreviousStartAnchor = false;
 		wrapPoints.Clear();
+	}
+
+	private sealed class CutPiece
+	{
+		private readonly bool anchorStart;
+		private readonly bool anchorEnd;
+		private readonly List<CutPoint> points = new List<CutPoint>();
+		private readonly List<float> segmentLengths = new List<float>();
+
+		public int Count => points.Count;
+
+		public CutPiece(bool anchorStart, bool anchorEnd)
+		{
+			this.anchorStart = anchorStart;
+			this.anchorEnd = anchorEnd;
+		}
+
+		public void Add(Vector2 position)
+		{
+			if (points.Count > 0)
+				segmentLengths.Add(Vector2.Distance(points[points.Count - 1].current, position));
+
+			points.Add(new CutPoint(position));
+		}
+
+		public void SetStartAnchor(Vector2 position)
+		{
+			if (!anchorStart || points.Count == 0)
+				return;
+
+			CutPoint point = points[0];
+			point.current = position;
+			point.previous = position;
+			points[0] = point;
+		}
+
+		public void SetEndAnchor(Vector2 position)
+		{
+			if (!anchorEnd || points.Count == 0)
+				return;
+
+			int index = points.Count - 1;
+			CutPoint point = points[index];
+			point.current = position;
+			point.previous = position;
+			points[index] = point;
+		}
+
+		public void KickStart(Vector2 velocity)
+		{
+			if (points.Count == 0 || IsAnchored(0))
+				return;
+
+			CutPoint point = points[0];
+			point.previous = point.current - velocity;
+			points[0] = point;
+		}
+
+		public void KickEnd(Vector2 velocity)
+		{
+			if (points.Count == 0 || IsAnchored(points.Count - 1))
+				return;
+
+			int index = points.Count - 1;
+			CutPoint point = points[index];
+			point.previous = point.current - velocity;
+			points[index] = point;
+		}
+
+		public void Simulate(Vector2 acceleration, float damping, float dt, int constraintIterations)
+		{
+			for (int i = 0; i < points.Count; i++)
+			{
+				if (IsAnchored(i))
+					continue;
+
+				CutPoint point = points[i];
+				Vector2 velocity = (point.current - point.previous) * damping;
+				point.previous = point.current;
+				point.current += velocity;
+				point.current += acceleration * (dt * dt);
+				points[i] = point;
+			}
+
+			int iterations = Mathf.Max(0, constraintIterations);
+			for (int i = 0; i < iterations; i++)
+			{
+				ApplyConstraints();
+				PinAnchors();
+			}
+		}
+
+		public void CopyPositions(Vector3[] buffer)
+		{
+			for (int i = 0; i < points.Count; i++)
+				buffer[i] = points[i].current;
+		}
+
+		private void ApplyConstraints()
+		{
+			for (int i = 0; i < points.Count - 1; i++)
+			{
+				CutPoint current = points[i];
+				CutPoint next = points[i + 1];
+				Vector2 delta = next.current - current.current;
+				float distance = delta.magnitude;
+				if (distance <= 0.0001f)
+					continue;
+
+				Vector2 correction = delta.normalized * (distance - segmentLengths[i]);
+				bool currentAnchored = IsAnchored(i);
+				bool nextAnchored = IsAnchored(i + 1);
+
+				if (currentAnchored && nextAnchored)
+					continue;
+
+				if (currentAnchored)
+					next.current -= correction;
+				else if (nextAnchored)
+					current.current += correction;
+				else
+				{
+					current.current += correction * 0.5f;
+					next.current -= correction * 0.5f;
+				}
+
+				points[i] = current;
+				points[i + 1] = next;
+			}
+		}
+
+		private void PinAnchors()
+		{
+			if (anchorStart && points.Count > 0)
+			{
+				CutPoint point = points[0];
+				point.previous = point.current;
+				points[0] = point;
+			}
+
+			if (anchorEnd && points.Count > 0)
+			{
+				int index = points.Count - 1;
+				CutPoint point = points[index];
+				point.previous = point.current;
+				points[index] = point;
+			}
+		}
+
+		private bool IsAnchored(int index)
+		{
+			return (anchorStart && index == 0) || (anchorEnd && index == points.Count - 1);
+		}
+
+		private struct CutPoint
+		{
+			public Vector2 current;
+			public Vector2 previous;
+
+			public CutPoint(Vector2 position)
+			{
+				current = position;
+				previous = position;
+			}
+		}
 	}
 
 	private readonly struct WrapPoint

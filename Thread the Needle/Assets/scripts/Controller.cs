@@ -1,16 +1,25 @@
+using System;
+using Unity.Cinemachine;
+using UnityEditor.Rendering;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 
 public class Controller : MonoBehaviour
 {
+	[Header("Fail State")]
+	[SerializeField] float timeBeforeRestart = 3f;
+	
+	[Header("Assignment")]
 	[SerializeField] DirectionIndicator directionIndicator;
 	[SerializeField] PowerIndicator powerIndicator;
 	[SerializeField] Needle needle;
-
+	
 	private float directionOffset;
 	private WrappedThreadPin currentPin;
 	private Vector2 currentWallNormal = Vector2.up;
 	private Vector2 currentContactPoint;
+	private float restartTimer = -1f;
 	
 	enum GameState
 	{
@@ -26,6 +35,19 @@ public class Controller : MonoBehaviour
 	private void Start()
 	{
 		needle.stickEvent += HandleStickEvent;
+		needle.failStateEvent += HandleFailStateEvent;
+	}
+
+	private void Update()
+	{
+		if (restartTimer >= 0f)
+			restartTimer += Time.deltaTime;
+
+		if (restartTimer >= timeBeforeRestart)
+		{
+			restartTimer = -1f;
+			SceneManager.LoadScene(SceneManager.GetActiveScene().name, LoadSceneMode.Single);
+		}
 	}
 
 	private void HandleStickEvent(WrappedThreadPin _pin)
@@ -41,6 +63,11 @@ public class Controller : MonoBehaviour
 		
 		directionIndicator.StartDirectionMinigame(currentContactPoint, currentWallNormal);
 		currentGameState = GameState.DIRECTION_MINIGAME;
+	}
+
+	private void HandleFailStateEvent()
+	{
+		restartTimer = 0f;
 	}
 	
 	private void OnJump(InputValue _value)
