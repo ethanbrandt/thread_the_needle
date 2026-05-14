@@ -16,8 +16,10 @@ public class WrappedThreadPin : MonoBehaviour
 	[Header("Wrapping")]
 	[SerializeField] LayerMask wallLayer;
 	[SerializeField] int maxWrapPoints = 16;
+	[SerializeField] int maxWrapPointsPerCollider = 2;
 	[SerializeField] float wrapPointPadding = 0.05f;
 	[SerializeField] float linecastEndpointPadding = 0.03f;
+	[SerializeField] float wrapPushDotThreshold = 0.1f;
 
 	[Header("Rendering")]
 	[SerializeField] float needleEyeYOffset = 0.75f;
@@ -54,6 +56,10 @@ public class WrappedThreadPin : MonoBehaviour
 	private readonly List<Vector2> spanSamples = new List<Vector2>();
 	private readonly List<float> currentSpanSags = new List<float>();
 	private readonly List<float> spanSagVelocities = new List<float>();
+	private readonly Dictionary<Collider2D, Vector2> previousColliderCenters = new Dictionary<Collider2D, Vector2>();
+	private readonly Dictionary<Collider2D, Vector2> colliderFrameDeltas = new Dictionary<Collider2D, Vector2>();
+	private readonly HashSet<Collider2D> activeWrappedColliders = new HashSet<Collider2D>();
+	private readonly List<Collider2D> staleWrappedColliders = new List<Collider2D>();
 	private Vector3[] renderBuffer = new Vector3[0];
 	private Vector3[] looseRenderBuffer = new Vector3[0];
 	private Vector2 previousStartAnchor;
@@ -64,6 +70,7 @@ public class WrappedThreadPin : MonoBehaviour
 	private Vector2 pendingVisualWrapFrom;
 	private Vector2 pendingVisualWrapTo;
 	private int pendingVisualWrapInsertIndex;
+	private bool addedWrapPointThisFrame;
 	private bool cut;
 	private CutPiece startPiece;
 	private CutPiece endPiece;
@@ -127,6 +134,7 @@ public class WrappedThreadPin : MonoBehaviour
 		Vector2 startAnchor = GetStartAnchor();
 		Vector2 endAnchor = transform.position;
 
+		addedWrapPointThisFrame = false;
 		UpdateNeedleArc(startAnchor);
 		ClearPendingVisualWrapHit();
 		UpdateWrapTopology(startAnchor, endAnchor);
@@ -180,8 +188,7 @@ public class WrappedThreadPin : MonoBehaviour
 
 	private bool TryAddWrapPointFromVisualRope()
 	{
-		if (hasPendingVisualWrapHit &&
-			TryInsertWrapPoint(pendingVisualWrapHit, pendingVisualWrapFrom, pendingVisualWrapTo, pendingVisualWrapInsertIndex))
+		if (hasPendingVisualWrapHit && TryInsertWrapPoint(pendingVisualWrapHit, pendingVisualWrapFrom, pendingVisualWrapTo, pendingVisualWrapInsertIndex))
 			return true;
 
 		int segmentCount = Mathf.Min(renderPositions.Count - 1, renderSegmentInsertIndices.Count);
@@ -205,16 +212,19 @@ public class WrappedThreadPin : MonoBehaviour
 		if (hit.collider == null || IsInLayerMask(hit.collider, hazardLayer))
 			return false;
 
+		if (!CanStoreWrapPoint(hit.collider))
+			return false;
+
 		if (!TryCreateWrapPoint(hit, from, to, out WrapPoint wrapPoint))
 		{
 			Vector2 fallbackPoint = hit.point + hit.normal * wrapPointPadding;
 			if (IsDuplicateWrapPoint(fallbackPoint))
 				return false;
 
-			wrapPoint = new WrapPoint(fallbackPoint, hit.collider);
+			wrapPoint = new WrapPoint(fallbackPoint, hit.collider, GetWrapTurnSign(from, fallbackPoint, to));
 		}
 
-		wrapPoints.Insert(Mathf.Clamp(insertIndex, 0, wrapPoints.Count), wrapPoint);
+		StoreWrapPoint(insertIndex, wrapPoint);
 		return true;
 	}
 
@@ -345,34 +355,34 @@ public class WrappedThreadPin : MonoBehaviour
 	{
 		RemoveUnneededWrapPoints(startAnchor, endAnchor);
 
-		for (int iteration = 0; iteration < maxWrapPoints; iteration++)
+		if (addedWrapPointThisFrame || wrapPoints.Count >= MaxAllowedWrapPoints)
+			return;
+
+		BuildControlPoints(startAnchor, endAnchor);
+
+		for (int i = 0; i < controlPoints.Count - 1; i++)
 		{
-			BuildControlPoints(startAnchor, endAnchor);
+			Vector2 from = controlPoints[i];
+			Vector2 to = controlPoints[i + 1];
 
-			bool addedWrapPoint = false;
-			for (int i = 0; i < controlPoints.Count - 1; i++)
+			if (!TryGetBlockingHit(from, to, out RaycastHit2D hit))
+				continue;
+
+			if (!CanStoreWrapPoint(hit.collider))
+				return;
+
+			if (!TryCreateWrapPoint(hit, from, to, out WrapPoint wrapPoint))
 			{
-				Vector2 from = controlPoints[i];
-				Vector2 to = controlPoints[i + 1];
+				Vector2 fallbackPoint = hit.point + hit.normal * wrapPointPadding;
+				if (IsDuplicateWrapPoint(fallbackPoint))
+					return;
 
-				if (!TryGetBlockingHit(from, to, out RaycastHit2D hit))
-					continue;
-
-				if (!TryCreateWrapPoint(hit, from, to, out WrapPoint wrapPoint))
-				{
-					Vector2 fallbackPoint = hit.point + hit.normal * wrapPointPadding;
-					wrapPoints.Insert(i, new WrapPoint(fallbackPoint, hit.collider));
-					addedWrapPoint = true;
-					break;
-				}
-
-				wrapPoints.Insert(i, wrapPoint);
-				addedWrapPoint = true;
-				break;
+				StoreWrapPoint(i, new WrapPoint(fallbackPoint, hit.collider, GetWrapTurnSign(from, fallbackPoint, to)));
+				return;
 			}
 
-			if (!addedWrapPoint)
-				return;
+			StoreWrapPoint(i, wrapPoint);
+			return;
 		}
 	}
 
@@ -384,14 +394,102 @@ public class WrappedThreadPin : MonoBehaviour
 				wrapPoints.RemoveAt(i);
 		}
 
+		UpdateColliderMotionTracking();
+		TrimExcessWrapPoints();
+
 		for (int i = wrapPoints.Count - 1; i >= 0; i--)
 		{
-			Vector2 previous = i == 0 ? startAnchor : wrapPoints[i - 1].Position;
-			Vector2 next = i == wrapPoints.Count - 1 ? endAnchor : wrapPoints[i + 1].Position;
-
-			if (HasLineOfSight(previous, next))
+			if (ShouldReleaseWrapPoint(i, startAnchor, endAnchor))
 				wrapPoints.RemoveAt(i);
 		}
+	}
+
+	private void TrimExcessWrapPoints()
+	{
+		int wrapPointLimit = MaxAllowedWrapPoints;
+		while (wrapPoints.Count > wrapPointLimit)
+			wrapPoints.RemoveAt(wrapPoints.Count - 1);
+	}
+
+	private void UpdateColliderMotionTracking()
+	{
+		activeWrappedColliders.Clear();
+		colliderFrameDeltas.Clear();
+
+		for (int i = 0; i < wrapPoints.Count; i++)
+		{
+			Collider2D collider = wrapPoints[i].collider;
+			if (collider == null || !activeWrappedColliders.Add(collider))
+				continue;
+
+			Vector2 currentCenter = collider.bounds.center;
+			if (previousColliderCenters.TryGetValue(collider, out Vector2 previousCenter))
+				colliderFrameDeltas[collider] = currentCenter - previousCenter;
+			else
+				colliderFrameDeltas[collider] = Vector2.zero;
+
+			previousColliderCenters[collider] = currentCenter;
+		}
+
+		staleWrappedColliders.Clear();
+		foreach (Collider2D collider in previousColliderCenters.Keys)
+		{
+			if (collider == null || !activeWrappedColliders.Contains(collider))
+				staleWrappedColliders.Add(collider);
+		}
+
+		for (int i = 0; i < staleWrappedColliders.Count; i++)
+		{
+			Collider2D collider = staleWrappedColliders[i];
+			previousColliderCenters.Remove(collider);
+			colliderFrameDeltas.Remove(collider);
+		}
+	}
+
+	private bool ShouldReleaseWrapPoint(int index, Vector2 startAnchor, Vector2 endAnchor)
+	{
+		Vector2 previous = index == 0 ? startAnchor : wrapPoints[index - 1].Position;
+		Vector2 next = index == wrapPoints.Count - 1 ? endAnchor : wrapPoints[index + 1].Position;
+
+		return HasLineOfSight(previous, next) && !IsWrapPointBeingPushed(wrapPoints[index]);
+	}
+
+	private bool IsWrapPointBeingPushed(WrapPoint wrapPoint)
+	{
+		if (wrapPoint.collider == null ||
+			!colliderFrameDeltas.TryGetValue(wrapPoint.collider, out Vector2 colliderDelta) ||
+			colliderDelta.sqrMagnitude <= 0.000001f)
+			return false;
+
+		Vector2 outwardDirection = wrapPoint.OutwardDirection;
+		if (outwardDirection.sqrMagnitude <= 0.0001f)
+			return false;
+
+		return Vector2.Dot(colliderDelta.normalized, outwardDirection.normalized) > wrapPushDotThreshold;
+	}
+
+	private bool CanStoreWrapPoint(Collider2D collider)
+	{
+		if (addedWrapPointThisFrame || collider == null || wrapPoints.Count >= MaxAllowedWrapPoints)
+			return false;
+
+		int colliderWrapPointCount = 0;
+		for (int i = 0; i < wrapPoints.Count; i++)
+		{
+			if (wrapPoints[i].collider == collider)
+				colliderWrapPointCount++;
+		}
+
+		return colliderWrapPointCount < MaxAllowedWrapPointsPerCollider;
+	}
+
+	private void StoreWrapPoint(int insertIndex, WrapPoint wrapPoint)
+	{
+		wrapPoints.Insert(Mathf.Clamp(insertIndex, 0, wrapPoints.Count), wrapPoint);
+		if (wrapPoint.collider != null && !previousColliderCenters.ContainsKey(wrapPoint.collider))
+			previousColliderCenters[wrapPoint.collider] = wrapPoint.collider.bounds.center;
+
+		addedWrapPointThisFrame = true;
 	}
 
 	private void BuildControlPoints(Vector2 startAnchor, Vector2 endAnchor)
@@ -450,13 +548,13 @@ public class WrappedThreadPin : MonoBehaviour
 
 		if (foundFullPathCandidate)
 		{
-			wrapPoint = new WrapPoint(bestFullPathPoint, hit.collider);
+			wrapPoint = new WrapPoint(bestFullPathPoint, hit.collider, GetWrapTurnSign(from, bestFullPathPoint, to));
 			return true;
 		}
 
 		if (foundPartialCandidate)
 		{
-			wrapPoint = new WrapPoint(bestPartialPoint, hit.collider);
+			wrapPoint = new WrapPoint(bestPartialPoint, hit.collider, GetWrapTurnSign(from, bestPartialPoint, to));
 			return true;
 		}
 
@@ -542,6 +640,23 @@ public class WrappedThreadPin : MonoBehaviour
 
 		return false;
 	}
+
+	private static int GetWrapTurnSign(Vector2 from, Vector2 wrapPoint, Vector2 to)
+	{
+		float cross = Cross(from - wrapPoint, to - wrapPoint);
+		if (Mathf.Abs(cross) <= 0.0001f)
+			return 0;
+
+		return cross > 0f ? 1 : -1;
+	}
+
+	private static float Cross(Vector2 a, Vector2 b)
+	{
+		return a.x * b.y - a.y * b.x;
+	}
+
+	private int MaxAllowedWrapPoints => Mathf.Max(0, maxWrapPoints);
+	private int MaxAllowedWrapPointsPerCollider => Mathf.Max(1, maxWrapPointsPerCollider);
 
 	private bool HasLineOfSight(Vector2 from, Vector2 to)
 	{
@@ -917,16 +1032,56 @@ public class WrappedThreadPin : MonoBehaviour
 	private readonly struct WrapPoint
 	{
 		private readonly Vector2 localPosition;
+		private readonly Vector2 fallbackWorldPosition;
+		private readonly Vector2 localOutwardDirection;
+		private readonly Vector2 fallbackWorldOutwardDirection;
+		private readonly int wrapSign;
 		public readonly Collider2D collider;
 
 		public bool IsValid => collider != null;
+		public int WrapSign => wrapSign;
 
-		public Vector2 Position => collider.transform.TransformPoint(localPosition);
+		public Vector2 Position
+		{
+			get
+			{
+				if (collider == null)
+					return fallbackWorldPosition;
 
-		public WrapPoint(Vector2 worldPosition, Collider2D collider)
+				return collider.transform.TransformPoint(localPosition);
+			}
+		}
+
+		public Vector2 OutwardDirection
+		{
+			get
+			{
+				if (collider == null)
+					return fallbackWorldOutwardDirection;
+
+				Vector2 worldDirection = collider.transform.TransformDirection(localOutwardDirection);
+				if (worldDirection.sqrMagnitude <= 0.0001f)
+					return fallbackWorldOutwardDirection;
+
+				return worldDirection.normalized;
+			}
+		}
+
+		public WrapPoint(Vector2 worldPosition, Collider2D collider, int wrapSign)
 		{
 			this.collider = collider;
+			this.wrapSign = wrapSign;
+			fallbackWorldPosition = worldPosition;
 			localPosition = collider != null ? collider.transform.InverseTransformPoint(worldPosition) : worldPosition;
+
+			Vector2 outwardWorldDirection = collider != null ? worldPosition - (Vector2)collider.bounds.center : Vector2.up;
+			if (outwardWorldDirection.sqrMagnitude <= 0.0001f)
+				outwardWorldDirection = Vector2.up;
+
+			fallbackWorldOutwardDirection = outwardWorldDirection.normalized;
+			localOutwardDirection = collider != null
+				? ((Vector2)collider.transform.InverseTransformDirection(fallbackWorldOutwardDirection)).normalized
+				: fallbackWorldOutwardDirection;
 		}
 	}
 }
