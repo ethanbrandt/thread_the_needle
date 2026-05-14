@@ -1393,12 +1393,13 @@ public class WrappedThreadPin : MonoBehaviour
 		float distance = Vector2.Distance(from, to);
 		int sampleCount = Mathf.Max(1, Mathf.CeilToInt(distance / Mathf.Max(visualSegmentLength, 0.01f)));
 		bool canUseNeedleArc = CanUseNeedleArc(spanIndex, distance);
-		float sagAmount = useSag ? GetSmoothedSagAmount(distance, spanIndex) : 0f;
+		bool canSag = useSag && !IsTensionedSpan(spanIndex);
+		float sagAmount = canSag ? GetSmoothedSagAmount(distance, spanIndex) : 0f;
 
 		if (includeStart)
 			renderPositions.Add(from);
 
-		if (useSag)
+		if (canSag)
 		{
 			float validSagAmount = GetLargestValidSag(from, to, sampleCount, spanIndex, sagAmount, false);
 			ClampStoredSag(spanIndex, sagAmount, validSagAmount);
@@ -1429,6 +1430,22 @@ public class WrappedThreadPin : MonoBehaviour
 		}
 
 		AddStraightSpan(from, to, sampleCount, spanIndex);
+	}
+
+	private bool IsTensionedSpan(int spanIndex)
+	{
+		if (wrapPoints.Count <= 0)
+			return false;
+
+		if (spanIndex >= 0 &&
+			spanIndex < currentSpanSags.Count &&
+			spanIndex < spanSagVelocities.Count)
+		{
+			currentSpanSags[spanIndex] = 0f;
+			spanSagVelocities[spanIndex] = 0f;
+		}
+
+		return true;
 	}
 
 	private float GetLargestValidSag(
