@@ -450,8 +450,15 @@ public class WrappedThreadPin : MonoBehaviour
 	{
 		Vector2 previous = index == 0 ? startAnchor : wrapPoints[index - 1].Position;
 		Vector2 next = index == wrapPoints.Count - 1 ? endAnchor : wrapPoints[index + 1].Position;
+		WrapPoint wrapPoint = wrapPoints[index];
 
-		return HasLineOfSight(previous, next) && !IsWrapPointBeingPushed(wrapPoints[index]);
+		if (!HasLineOfSight(previous, next))
+			return false;
+
+		if (pinned && !HasWrapPointColliderMovedThisFrame(wrapPoint))
+			return false;
+
+		return !IsWrapPointBeingPushed(wrapPoint);
 	}
 
 	private bool IsWrapPointBeingPushed(WrapPoint wrapPoint)
@@ -466,6 +473,13 @@ public class WrappedThreadPin : MonoBehaviour
 			return false;
 
 		return Vector2.Dot(colliderDelta.normalized, outwardDirection.normalized) > wrapPushDotThreshold;
+	}
+
+	private bool HasWrapPointColliderMovedThisFrame(WrapPoint wrapPoint)
+	{
+		return wrapPoint.collider != null &&
+			colliderFrameDeltas.TryGetValue(wrapPoint.collider, out Vector2 colliderDelta) &&
+			colliderDelta.sqrMagnitude > 0.000001f;
 	}
 
 	private bool CanStoreWrapPoint(Collider2D collider)
