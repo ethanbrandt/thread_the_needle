@@ -159,7 +159,7 @@ public class Needle : MonoBehaviour
 			pinPos = _contactPos;
 		}
 		
-		GameObject pinObj = Instantiate(pinPrefab, pinPos + pinNormal * 0.05f, Quaternion.Euler(0f, 0f, pinAngle + 90f));
+		GameObject pinObj = Instantiate(pinPrefab, pinPos + pinNormal.normalized * -0.025f, Quaternion.Euler(0f, 0f, pinAngle + 90f));
 		pinObj.transform.SetParent(_wall);
 		stickEvent?.Invoke(pinObj.GetComponent<WrappedThreadPin>());
 	}

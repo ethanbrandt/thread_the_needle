@@ -228,22 +228,36 @@ MonoBehaviour:
     m_Bits: 192
   maxWrapPoints: 32
   maxWrapPointsPerCollider: 3
-  wrapPointPadding: 0.05
+  wrapPointPadding: 0.08
   linecastEndpointPadding: 0.03
-  anchorColliderPadding: 0.1
-  compositeCandidateRadius: 1.5
-  wrapPushDotThreshold: 0.1
+  anchorColliderPadding: 0.025
+  releaseCornerGrazingPadding: 0.1
+  candidateRadius: 0.12
+  compositeCandidateRadius: 0.15
+  wrapPushDotThreshold: 0.01
+  passiveStraightenClearFrames: 5
+  pinnedPassiveStraightenClearFrames: 5
   needleEyeYOffset: 0.75
   visualSegmentLength: 0.15
   useSag: 1
-  sagPerUnit: 0.06
-  maxSag: 0.35
-  sagSmoothTime: 0.12
+  sagPerUnit: 0.03
+  maxSag: 0.3
+  sagSmoothTime: 0.3
   lineCornerVertices: 12
   needleArcSamples: 0
   needleArcStrength: 0
   needleArcReturnSpeed: 0
   maxNeedleArcOffset: 0
+  debugOverlay: 1
+  debugOnlyWhenSelected: 0
+  debugPointRadius: 0.06
+  debugControlSpanColor: {r: 0, g: 1, b: 1, a: 1}
+  debugWrapPointColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+  debugCandidateColor: {r: 1, g: 0, b: 1, a: 1}
+  debugRejectedCandidateColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
+  debugBlockingHitColor: {r: 1, g: 0, b: 0, a: 1}
+  debugInsertedWrapColor: {r: 0, g: 1, b: 0, a: 1}
+  debugReleasedWrapColor: {r: 0, g: 0, b: 1, a: 1}
   pinned: 0
 --- !u!114 &6467057950519784786
 MonoBehaviour:
