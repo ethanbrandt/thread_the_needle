@@ -50,6 +50,7 @@ public class WrappedThreadPin : MonoBehaviour
 	private readonly List<Vector2> controlPoints = new List<Vector2>();
 	private readonly List<Vector2> candidatePoints = new List<Vector2>();
 	private readonly List<Vector3> renderPositions = new List<Vector3>();
+	private readonly List<int> renderSegmentInsertIndices = new List<int>();
 	private readonly List<Vector2> spanSamples = new List<Vector2>();
 	private readonly List<float> currentSpanSags = new List<float>();
 	private readonly List<float> spanSagVelocities = new List<float>();
@@ -58,6 +59,11 @@ public class WrappedThreadPin : MonoBehaviour
 	private Vector2 previousStartAnchor;
 	private Vector2 needleArcOffset;
 	private bool hasPreviousStartAnchor;
+	private bool hasPendingVisualWrapHit;
+	private RaycastHit2D pendingVisualWrapHit;
+	private Vector2 pendingVisualWrapFrom;
+	private Vector2 pendingVisualWrapTo;
+	private int pendingVisualWrapInsertIndex;
 	private bool cut;
 	private CutPiece startPiece;
 	private CutPiece endPiece;
@@ -122,8 +128,16 @@ public class WrappedThreadPin : MonoBehaviour
 		Vector2 endAnchor = transform.position;
 
 		UpdateNeedleArc(startAnchor);
+		ClearPendingVisualWrapHit();
 		UpdateWrapTopology(startAnchor, endAnchor);
 		BuildRenderPositions(startAnchor, endAnchor);
+
+		if (TryAddWrapPointFromVisualRope())
+		{
+			ClearPendingVisualWrapHit();
+			UpdateWrapTopology(startAnchor, endAnchor);
+			BuildRenderPositions(startAnchor, endAnchor);
+		}
 
 		if (TryCutFromHazard())
 		{
@@ -162,6 +176,72 @@ public class WrappedThreadPin : MonoBehaviour
 		}
 
 		return false;
+	}
+
+	private bool TryAddWrapPointFromVisualRope()
+	{
+		if (hasPendingVisualWrapHit &&
+			TryInsertWrapPoint(pendingVisualWrapHit, pendingVisualWrapFrom, pendingVisualWrapTo, pendingVisualWrapInsertIndex))
+			return true;
+
+		int segmentCount = Mathf.Min(renderPositions.Count - 1, renderSegmentInsertIndices.Count);
+		for (int i = 0; i < segmentCount; i++)
+		{
+			Vector2 from = renderPositions[i];
+			Vector2 to = renderPositions[i + 1];
+
+			if (!TryGetBlockingHit(from, to, out RaycastHit2D hit))
+				continue;
+
+			if (TryInsertWrapPoint(hit, from, to, renderSegmentInsertIndices[i]))
+				return true;
+		}
+
+		return false;
+	}
+
+	private bool TryInsertWrapPoint(RaycastHit2D hit, Vector2 from, Vector2 to, int insertIndex)
+	{
+		if (hit.collider == null || IsInLayerMask(hit.collider, hazardLayer))
+			return false;
+
+		if (!TryCreateWrapPoint(hit, from, to, out WrapPoint wrapPoint))
+		{
+			Vector2 fallbackPoint = hit.point + hit.normal * wrapPointPadding;
+			if (IsDuplicateWrapPoint(fallbackPoint))
+				return false;
+
+			wrapPoint = new WrapPoint(fallbackPoint, hit.collider);
+		}
+
+		wrapPoints.Insert(Mathf.Clamp(insertIndex, 0, wrapPoints.Count), wrapPoint);
+		return true;
+	}
+
+	private void ClearPendingVisualWrapHit()
+	{
+		hasPendingVisualWrapHit = false;
+		pendingVisualWrapHit = default;
+		pendingVisualWrapFrom = Vector2.zero;
+		pendingVisualWrapTo = Vector2.zero;
+		pendingVisualWrapInsertIndex = 0;
+	}
+
+	private void RecordPendingVisualWrapHit(RaycastHit2D hit, Vector2 from, Vector2 to, int insertIndex)
+	{
+		if (hasPendingVisualWrapHit || hit.collider == null || IsInLayerMask(hit.collider, hazardLayer))
+			return;
+
+		hasPendingVisualWrapHit = true;
+		pendingVisualWrapHit = hit;
+		pendingVisualWrapFrom = from;
+		pendingVisualWrapTo = to;
+		pendingVisualWrapInsertIndex = insertIndex;
+	}
+
+	private bool IsInLayerMask(Collider2D collider, LayerMask layerMask)
+	{
+		return ((1 << collider.gameObject.layer) & layerMask.value) != 0;
 	}
 
 	private void CutAt(int segmentIndex, Vector2 cutPoint)
@@ -300,8 +380,14 @@ public class WrappedThreadPin : MonoBehaviour
 	{
 		for (int i = wrapPoints.Count - 1; i >= 0; i--)
 		{
-			Vector2 previous = i == 0 ? startAnchor : wrapPoints[i - 1].position;
-			Vector2 next = i == wrapPoints.Count - 1 ? endAnchor : wrapPoints[i + 1].position;
+			if (!wrapPoints[i].IsValid)
+				wrapPoints.RemoveAt(i);
+		}
+
+		for (int i = wrapPoints.Count - 1; i >= 0; i--)
+		{
+			Vector2 previous = i == 0 ? startAnchor : wrapPoints[i - 1].Position;
+			Vector2 next = i == wrapPoints.Count - 1 ? endAnchor : wrapPoints[i + 1].Position;
 
 			if (HasLineOfSight(previous, next))
 				wrapPoints.RemoveAt(i);
@@ -314,7 +400,7 @@ public class WrappedThreadPin : MonoBehaviour
 		controlPoints.Add(startAnchor);
 
 		for (int i = 0; i < wrapPoints.Count; i++)
-			controlPoints.Add(wrapPoints[i].position);
+			controlPoints.Add(wrapPoints[i].Position);
 
 		controlPoints.Add(endAnchor);
 	}
@@ -450,7 +536,7 @@ public class WrappedThreadPin : MonoBehaviour
 
 		for (int i = 0; i < wrapPoints.Count; i++)
 		{
-			if ((wrapPoints[i].position - candidate).sqrMagnitude <= minDistanceSqr)
+			if ((wrapPoints[i].Position - candidate).sqrMagnitude <= minDistanceSqr)
 				return true;
 		}
 
@@ -497,6 +583,7 @@ public class WrappedThreadPin : MonoBehaviour
 	private void BuildRenderPositions(Vector2 startAnchor, Vector2 endAnchor)
 	{
 		renderPositions.Clear();
+		renderSegmentInsertIndices.Clear();
 		BuildControlPoints(startAnchor, endAnchor);
 		EnsureSagState(controlPoints.Count - 1);
 
@@ -543,7 +630,7 @@ public class WrappedThreadPin : MonoBehaviour
 		if (useSag && TryBuildSpan(from, to, sampleCount, spanIndex, sagAmount, canUseNeedleArc))
 		{
 			for (int i = 0; i < spanSamples.Count; i++)
-				renderPositions.Add(spanSamples[i]);
+				AddRenderPosition(spanSamples[i], spanIndex);
 
 			return;
 		}
@@ -551,7 +638,7 @@ public class WrappedThreadPin : MonoBehaviour
 		if (useSag && canUseNeedleArc && TryBuildSpan(from, to, sampleCount, spanIndex, sagAmount, false))
 		{
 			for (int i = 0; i < spanSamples.Count; i++)
-				renderPositions.Add(spanSamples[i]);
+				AddRenderPosition(spanSamples[i], spanIndex);
 
 			return;
 		}
@@ -559,12 +646,20 @@ public class WrappedThreadPin : MonoBehaviour
 		if (!useSag && canUseNeedleArc && TryBuildSpan(from, to, sampleCount, spanIndex, 0f, true))
 		{
 			for (int i = 0; i < spanSamples.Count; i++)
-				renderPositions.Add(spanSamples[i]);
+				AddRenderPosition(spanSamples[i], spanIndex);
 
 			return;
 		}
 
-		AddStraightSpan(from, to, sampleCount);
+		AddStraightSpan(from, to, sampleCount, spanIndex);
+	}
+
+	private void AddRenderPosition(Vector2 position, int insertIndex)
+	{
+		if (renderPositions.Count > 0)
+			renderSegmentInsertIndices.Add(insertIndex);
+
+		renderPositions.Add(position);
 	}
 
 	private float GetSmoothedSagAmount(float spanDistance, int spanIndex)
@@ -596,8 +691,11 @@ public class WrappedThreadPin : MonoBehaviour
 			if (applyNeedleArc)
 				sample += needleArcOffset * GetNeedleArcFalloff(t, from, to);
 
-			if (!HasLineOfSight(previous, sample))
+			if (TryGetBlockingHit(previous, sample, out RaycastHit2D hit))
+			{
+				RecordPendingVisualWrapHit(hit, previous, sample, spanIndex);
 				return false;
+			}
 
 			spanSamples.Add(sample);
 			previous = sample;
@@ -606,10 +704,10 @@ public class WrappedThreadPin : MonoBehaviour
 		return true;
 	}
 
-	private void AddStraightSpan(Vector2 from, Vector2 to, int sampleCount)
+	private void AddStraightSpan(Vector2 from, Vector2 to, int sampleCount, int spanIndex)
 	{
 		for (int i = 1; i <= sampleCount; i++)
-			renderPositions.Add(Vector2.Lerp(from, to, i / (float)sampleCount));
+			AddRenderPosition(Vector2.Lerp(from, to, i / (float)sampleCount), spanIndex);
 	}
 
 	private bool CanUseNeedleArc(int spanIndex, float spanDistance)
@@ -818,13 +916,17 @@ public class WrappedThreadPin : MonoBehaviour
 
 	private readonly struct WrapPoint
 	{
-		public readonly Vector2 position;
+		private readonly Vector2 localPosition;
 		public readonly Collider2D collider;
 
-		public WrapPoint(Vector2 position, Collider2D collider)
+		public bool IsValid => collider != null;
+
+		public Vector2 Position => collider.transform.TransformPoint(localPosition);
+
+		public WrapPoint(Vector2 worldPosition, Collider2D collider)
 		{
-			this.position = position;
 			this.collider = collider;
+			localPosition = collider != null ? collider.transform.InverseTransformPoint(worldPosition) : worldPosition;
 		}
 	}
 }
