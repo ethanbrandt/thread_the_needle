@@ -44,6 +44,11 @@ public class Needle : MonoBehaviour
 		WrappedThreadPin.CutEvent += HandleCut;
 	}
 
+	private void OnDestroy()
+	{
+		WrappedThreadPin.CutEvent -= HandleCut;
+	}
+
 	private void HandleCut(bool _attached)
 	{
 		if (!_attached)
@@ -95,7 +100,6 @@ public class Needle : MonoBehaviour
 			Debug.DrawRay(contact.point, -contact.normal, Color.cyan, 5f);
 			Debug.DrawRay(contact.point, tipDir, Color.red, 5f);
 			print(tipIntoWallAmount + " : " + contact.point);
-			tipIntoWallAmount = 0;
 			if (currentVelocity.magnitude >= minSpeedForStick && (Vector2.Distance(contact.point, tipPos) <= tipHitTolerance || tipIntoWallAmount > 0.2f))
 			{
 				Vector2 wallNormal = contact.normal;
