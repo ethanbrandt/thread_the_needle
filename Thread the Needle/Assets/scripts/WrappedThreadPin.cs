@@ -56,6 +56,8 @@ public class WrappedThreadPin : MonoBehaviour
 	[SerializeField] float sagPerUnit = 0.06f;
 	[Tooltip("Maximum visual sag for one span.")]
 	[SerializeField] float maxSag = 0.35f;
+	[Tooltip("Sag multiplier used while the thread is wrapped and visually under tension.")]
+	[SerializeField] float wrappedSagMultiplier = 0.15f;
 	[Tooltip("Smoothing time used when visual sag changes.")]
 	[SerializeField] float sagSmoothTime = 0.12f;
 	[Tooltip("Minimum LineRenderer corner vertices assigned on Awake.")]
@@ -1393,8 +1395,9 @@ public class WrappedThreadPin : MonoBehaviour
 		float distance = Vector2.Distance(from, to);
 		int sampleCount = Mathf.Max(1, Mathf.CeilToInt(distance / Mathf.Max(visualSegmentLength, 0.01f)));
 		bool canUseNeedleArc = CanUseNeedleArc(spanIndex, distance);
-		bool canSag = useSag && !IsTensionedSpan(spanIndex);
-		float sagAmount = canSag ? GetSmoothedSagAmount(distance, spanIndex) : 0f;
+		float sagMultiplier = GetSagMultiplier(spanIndex);
+		float sagAmount = useSag ? GetSmoothedSagAmount(distance, spanIndex, sagMultiplier) : 0f;
+		bool canSag = useSag && sagAmount > SagClampEpsilon;
 
 		if (includeStart)
 			renderPositions.Add(from);
@@ -1432,20 +1435,12 @@ public class WrappedThreadPin : MonoBehaviour
 		AddStraightSpan(from, to, sampleCount, spanIndex);
 	}
 
-	private bool IsTensionedSpan(int spanIndex)
+	private float GetSagMultiplier(int spanIndex)
 	{
 		if (wrapPoints.Count <= 0)
-			return false;
+			return 1f;
 
-		if (spanIndex >= 0 &&
-			spanIndex < currentSpanSags.Count &&
-			spanIndex < spanSagVelocities.Count)
-		{
-			currentSpanSags[spanIndex] = 0f;
-			spanSagVelocities[spanIndex] = 0f;
-		}
-
-		return true;
+		return Mathf.Clamp01(wrappedSagMultiplier);
 	}
 
 	private float GetLargestValidSag(
@@ -1500,9 +1495,9 @@ public class WrappedThreadPin : MonoBehaviour
 		renderPositions.Add(position);
 	}
 
-	private float GetSmoothedSagAmount(float spanDistance, int spanIndex)
+	private float GetSmoothedSagAmount(float spanDistance, int spanIndex, float sagMultiplier)
 	{
-		float targetSag = Mathf.Min(maxSag, spanDistance * sagPerUnit);
+		float targetSag = Mathf.Min(maxSag, spanDistance * sagPerUnit) * Mathf.Clamp01(sagMultiplier);
 		float sagVelocity = spanSagVelocities[spanIndex];
 		currentSpanSags[spanIndex] = Mathf.SmoothDamp(
 			currentSpanSags[spanIndex],
