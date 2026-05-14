@@ -44,6 +44,8 @@ public class WrappedThreadPin : MonoBehaviour
 	[SerializeField] int passiveStraightenClearFrames = 2;
 	[Tooltip("Frames a clear bridge must remain clear before a pinned wrap on a static collider releases.")]
 	[SerializeField] int pinnedPassiveStraightenClearFrames = 4;
+	[Tooltip("Frames a moving collider bridge must remain clear before its wrap point can release.")]
+	[SerializeField] int movingColliderBridgeClearFrames = 6;
 
 	[Header("Rendering")]
 	[Tooltip("Offset from the needle transform to the thread eye while the thread is attached to the active needle.")]
@@ -62,16 +64,6 @@ public class WrappedThreadPin : MonoBehaviour
 	[SerializeField] float sagSmoothTime = 0.12f;
 	[Tooltip("Minimum LineRenderer corner vertices assigned on Awake.")]
 	[SerializeField] int lineCornerVertices = 4;
-
-	[Header("Needle Arc")]
-	[Tooltip("Number of rendered samples near the needle affected by needle motion arc.")]
-	[SerializeField] int needleArcSamples = 5;
-	[Tooltip("How strongly sudden needle movement bends the visual thread near the needle.")]
-	[SerializeField] float needleArcStrength = 0.35f;
-	[Tooltip("How quickly the visual needle arc returns to zero.")]
-	[SerializeField] float needleArcReturnSpeed = 12f;
-	[Tooltip("Maximum visual offset from needle arc motion.")]
-	[SerializeField] float maxNeedleArcOffset = 0.5f;
 
 	[Header("Debug")]
 	[Tooltip("Draw logical spans, wrap points, candidates, and recent solver events as Gizmos.")]
@@ -96,6 +88,7 @@ public class WrappedThreadPin : MonoBehaviour
 	[SerializeField] Color debugReleasedWrapColor = Color.blue;
 
 	private const int MaxWrapSolveIterations = 8;
+	private const int MovingColliderBridgeSampleCount = 48;
 	private const int SagClampSearchIterations = 6;
 	private const float SagClampEpsilon = 0.0005f;
 
@@ -134,9 +127,6 @@ public class WrappedThreadPin : MonoBehaviour
 	private Vector3[] renderBuffer = new Vector3[0];
 	private Vector3[] looseRenderBuffer = new Vector3[0];
 	private Vector2[] colliderPathBuffer = new Vector2[0];
-	private Vector2 previousStartAnchor;
-	private Vector2 needleArcOffset;
-	private bool hasPreviousStartAnchor;
 	private bool releasedWrapPointThisFrame;
 	private bool cut;
 	private CutPiece startPiece;
@@ -205,7 +195,6 @@ public class WrappedThreadPin : MonoBehaviour
 
 		releasedWrapPointThisFrame = false;
 		ClearDebugFrame();
-		UpdateNeedleArc(startAnchor);
 		UpdateWrapTopology(startAnchor, endAnchor);
 		BuildRenderPositions(startAnchor, endAnchor);
 
@@ -282,7 +271,6 @@ public class WrappedThreadPin : MonoBehaviour
 		cut = true;
 		looseRenderer.enabled = true;
 		looseRenderer.colorGradient = lineRenderer.colorGradient;
-		needleArcOffset = Vector2.zero;
 		
 		CutEvent?.Invoke(!pinned);
 	}
@@ -356,29 +344,6 @@ public class WrappedThreadPin : MonoBehaviour
 			return pinTarget.position;
 
 		return pinTarget.position + pinTarget.up * needleEyeYOffset;
-	}
-
-	private void UpdateNeedleArc(Vector2 startAnchor)
-	{
-		if (!hasPreviousStartAnchor)
-		{
-			previousStartAnchor = startAnchor;
-			hasPreviousStartAnchor = true;
-			return;
-		}
-
-		Vector2 anchorDelta = startAnchor - previousStartAnchor;
-		previousStartAnchor = startAnchor;
-
-		if (!pinned)
-			needleArcOffset -= anchorDelta * needleArcStrength;
-
-		float maxOffsetSqr = maxNeedleArcOffset * maxNeedleArcOffset;
-		if (needleArcOffset.sqrMagnitude > maxOffsetSqr)
-			needleArcOffset = needleArcOffset.normalized * maxNeedleArcOffset;
-
-		float decay = 1f - Mathf.Exp(-needleArcReturnSpeed * Time.deltaTime);
-		needleArcOffset = Vector2.Lerp(needleArcOffset, Vector2.zero, decay);
 	}
 
 	private void UpdateWrapTopology(Vector2 startAnchor, Vector2 endAnchor)
@@ -547,6 +512,12 @@ public class WrappedThreadPin : MonoBehaviour
 		WrapPoint wrapPoint = wrapPoints[index];
 		bool wrapColliderMoved = HasWrapPointColliderMovedThisFrame(wrapPoint);
 
+		if (wrapColliderMoved && HasMovingColliderBridgeCrossing(previous, next, wrapPoint.collider))
+		{
+			ResetPassiveBridgeClearFrames(index, wrapPoint);
+			return false;
+		}
+
 		if (!HasProtectedBridgeClearance(index, previous, next, previousCollider, nextCollider, wrapPoint.Position))
 		{
 			ResetPassiveBridgeClearFrames(index, wrapPoint);
@@ -604,7 +575,7 @@ public class WrappedThreadPin : MonoBehaviour
 		int requiredClearFrames;
 
 		if (wrapColliderMoved)
-			requiredClearFrames = Mathf.Max(PassiveStraightenClearFrameLimit, 6);
+			requiredClearFrames = MovingColliderBridgeClearFrameLimit;
 		else if (pinned)
 			requiredClearFrames = PinnedPassiveStraightenClearFrameLimit;
 		else
@@ -643,6 +614,26 @@ public class WrappedThreadPin : MonoBehaviour
 		return wrapPoint.collider != null &&
 			colliderFrameDeltas.TryGetValue(wrapPoint.collider, out Vector2 colliderDelta) &&
 			colliderDelta.sqrMagnitude > 0.000001f;
+	}
+
+	private bool HasMovingColliderBridgeCrossing(Vector2 from, Vector2 to, Collider2D collider)
+	{
+		if (collider == null)
+			return false;
+
+		Vector2 delta = to - from;
+		if (delta.sqrMagnitude <= 0.00000001f)
+			return false;
+
+		for (int i = 1; i < MovingColliderBridgeSampleCount; i++)
+		{
+			float t = i / (float)MovingColliderBridgeSampleCount;
+			Vector2 sample = Vector2.Lerp(from, to, t);
+			if (collider.OverlapPoint(sample))
+				return true;
+		}
+
+		return false;
 	}
 
 	private bool CanStoreWrapPoint(Collider2D collider)
@@ -1058,6 +1049,7 @@ public class WrappedThreadPin : MonoBehaviour
 	private int MaxAllowedWrapPointsPerCollider => Mathf.Max(1, maxWrapPointsPerCollider);
 	private int PassiveStraightenClearFrameLimit => Mathf.Max(1, passiveStraightenClearFrames);
 	private int PinnedPassiveStraightenClearFrameLimit => Mathf.Max(1, pinnedPassiveStraightenClearFrames);
+	private int MovingColliderBridgeClearFrameLimit => Mathf.Max(1, movingColliderBridgeClearFrames);
 	private float AnchorColliderPaddingSqr => anchorColliderPadding * anchorColliderPadding;
 	private float ReleaseCornerGrazingPaddingSqr => releaseCornerGrazingPadding * releaseCornerGrazingPadding;
 	private float CandidateRadius => Mathf.Max(wrapPointPadding * 4f, candidateRadius);
@@ -1394,7 +1386,6 @@ public class WrappedThreadPin : MonoBehaviour
 	{
 		float distance = Vector2.Distance(from, to);
 		int sampleCount = Mathf.Max(1, Mathf.CeilToInt(distance / Mathf.Max(visualSegmentLength, 0.01f)));
-		bool canUseNeedleArc = CanUseNeedleArc(spanIndex, distance);
 		float sagMultiplier = GetSagMultiplier(spanIndex);
 		float sagAmount = useSag ? GetSmoothedSagAmount(distance, spanIndex, sagMultiplier) : 0f;
 		bool canSag = useSag && sagAmount > SagClampEpsilon;
@@ -1404,32 +1395,16 @@ public class WrappedThreadPin : MonoBehaviour
 
 		if (canSag)
 		{
-			float validSagAmount = GetLargestValidSag(from, to, sampleCount, spanIndex, sagAmount, false);
+			float validSagAmount = GetLargestValidSag(from, to, sampleCount, spanIndex, sagAmount);
 			ClampStoredSag(spanIndex, sagAmount, validSagAmount);
 
-			if (canUseNeedleArc && TryBuildSpan(from, to, sampleCount, spanIndex, validSagAmount, true))
+			if (TryBuildSpan(from, to, sampleCount, spanIndex, validSagAmount))
 			{
 				for (int i = 0; i < spanSamples.Count; i++)
 					AddRenderPosition(spanSamples[i], spanIndex);
 
 				return;
 			}
-
-			if (TryBuildSpan(from, to, sampleCount, spanIndex, validSagAmount, false))
-			{
-				for (int i = 0; i < spanSamples.Count; i++)
-					AddRenderPosition(spanSamples[i], spanIndex);
-
-				return;
-			}
-		}
-
-		if (!useSag && canUseNeedleArc && TryBuildSpan(from, to, sampleCount, spanIndex, 0f, true))
-		{
-			for (int i = 0; i < spanSamples.Count; i++)
-				AddRenderPosition(spanSamples[i], spanIndex);
-
-			return;
 		}
 
 		AddStraightSpan(from, to, sampleCount, spanIndex);
@@ -1448,17 +1423,16 @@ public class WrappedThreadPin : MonoBehaviour
 		Vector2 to,
 		int sampleCount,
 		int spanIndex,
-		float requestedSag,
-		bool applyNeedleArc)
+		float requestedSag)
 	{
 		requestedSag = Mathf.Max(0f, requestedSag);
 		if (requestedSag <= SagClampEpsilon)
 			return 0f;
 
-		if (TryBuildSpan(from, to, sampleCount, spanIndex, requestedSag, applyNeedleArc))
+		if (TryBuildSpan(from, to, sampleCount, spanIndex, requestedSag))
 			return requestedSag;
 
-		if (!TryBuildSpan(from, to, sampleCount, spanIndex, 0f, applyNeedleArc))
+		if (!TryBuildSpan(from, to, sampleCount, spanIndex, 0f))
 			return 0f;
 
 		float low = 0f;
@@ -1466,7 +1440,7 @@ public class WrappedThreadPin : MonoBehaviour
 		for (int i = 0; i < SagClampSearchIterations; i++)
 		{
 			float mid = (low + high) * 0.5f;
-			if (TryBuildSpan(from, to, sampleCount, spanIndex, mid, applyNeedleArc))
+			if (TryBuildSpan(from, to, sampleCount, spanIndex, mid))
 				low = mid;
 			else
 				high = mid;
@@ -1510,7 +1484,7 @@ public class WrappedThreadPin : MonoBehaviour
 		return currentSpanSags[spanIndex];
 	}
 
-	private bool TryBuildSpan(Vector2 from, Vector2 to, int sampleCount, int spanIndex, float sagAmount, bool applyNeedleArc)
+	private bool TryBuildSpan(Vector2 from, Vector2 to, int sampleCount, int spanIndex, float sagAmount)
 	{
 		spanSamples.Clear();
 
@@ -1523,8 +1497,6 @@ public class WrappedThreadPin : MonoBehaviour
 			float t = i / (float)sampleCount;
 			Vector2 sample = Vector2.Lerp(from, to, t);
 			sample += Vector2.down * (Mathf.Sin(t * Mathf.PI) * sagAmount);
-			if (applyNeedleArc)
-				sample += needleArcOffset * GetNeedleArcFalloff(t, from, to);
 
 			if (TryGetBlockingHit(previous, sample, fromCollider, from, toCollider, to, out _))
 				return false;
@@ -1542,34 +1514,10 @@ public class WrappedThreadPin : MonoBehaviour
 			AddRenderPosition(Vector2.Lerp(from, to, i / (float)sampleCount), spanIndex);
 	}
 
-	private bool CanUseNeedleArc(int spanIndex, float spanDistance)
-	{
-		return !pinned &&
-			spanIndex == 0 &&
-			needleArcSamples > 0 &&
-			spanDistance > 0.0001f &&
-			needleArcOffset.sqrMagnitude >= 0.0001f;
-	}
-
-	private float GetNeedleArcFalloff(float t, Vector2 from, Vector2 to)
-	{
-		float spanDistance = Vector2.Distance(from, to);
-		float arcReach = Mathf.Clamp01((needleArcSamples * Mathf.Max(visualSegmentLength, 0.01f)) / spanDistance);
-		if (arcReach <= 0.0001f || t > arcReach)
-			return 0f;
-
-		float localT = Mathf.Clamp01(t / arcReach);
-		float easeIn = Mathf.SmoothStep(0f, 1f, localT);
-		float easeOut = 1f - Mathf.SmoothStep(0f, 1f, localT);
-
-		return easeIn * easeOut * 4f;
-	}
-
 	public void Pin(Transform newPinTarget)
 	{
 		pinTarget = newPinTarget;
 		pinned = true;
-		hasPreviousStartAnchor = false;
 	}
 
 	public void Needle(Transform needle)
@@ -1584,8 +1532,6 @@ public class WrappedThreadPin : MonoBehaviour
 		cut = false;
 		startPiece = null;
 		endPiece = null;
-		needleArcOffset = Vector2.zero;
-		hasPreviousStartAnchor = false;
 		wrapPoints.Clear();
 		controlPoints.Clear();
 		controlPointColliders.Clear();

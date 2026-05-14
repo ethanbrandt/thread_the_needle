@@ -237,18 +237,16 @@ MonoBehaviour:
   wrapPushDotThreshold: 0.01
   passiveStraightenClearFrames: 10
   pinnedPassiveStraightenClearFrames: 10
+  movingColliderBridgeClearFrames: 6
   needleEyeYOffset: 0.75
   visualSegmentLength: 0.15
   useSag: 1
   sagPerUnit: 0.03
   maxSag: 0.3
+  wrappedSagMultiplier: 0.15
   sagSmoothTime: 0.3
   lineCornerVertices: 12
-  needleArcSamples: 0
-  needleArcStrength: 0
-  needleArcReturnSpeed: 0
-  maxNeedleArcOffset: 0
-  debugOverlay: 1
+  debugOverlay: 0
   debugOnlyWhenSelected: 0
   debugPointRadius: 0.06
   debugControlSpanColor: {r: 0, g: 1, b: 1, a: 1}
