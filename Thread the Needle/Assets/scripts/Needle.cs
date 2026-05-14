@@ -1,7 +1,11 @@
 using UnityEngine;
 using System;
 using System.Collections;
+using System.Numerics;
 using Unity.Mathematics;
+using Quaternion = UnityEngine.Quaternion;
+using Vector2 = UnityEngine.Vector2;
+using Vector3 = UnityEngine.Vector3;
 
 public class Needle : MonoBehaviour
 {
@@ -71,7 +75,6 @@ public class Needle : MonoBehaviour
 
 	private void OnCollisionEnter2D(Collision2D col)
 	{
-		print(col.gameObject.name);
 		if (hasHit)
 			return;
 		
@@ -133,24 +136,27 @@ public class Needle : MonoBehaviour
 		transform.position = targetTipPos - tipOffset;
 		
 		transform.SetParent(_wall);
-		RaycastHit2D hit = Physics2D.Raycast(transform.up, -transform.up, 3f, wallLayer, 0, Mathf.Infinity);
+		RaycastHit2D hit = Physics2D.Raycast(transform.position + transform.up, -transform.up, 3f, wallLayer, 0, Mathf.Infinity);
 
 		float pinAngle;
 		Vector2 pinPos;
-		
-		if (!hit)
+		Vector2 pinNormal;
+		if (hit && hit.transform == _wall)
 		{
-			pinAngle = Mathf.Atan2(_intoWallDir.y, _intoWallDir.x) * Mathf.Rad2Deg;
-			pinPos = _contactPos;
-			print("NO HIT");
-		}
-		else
-		{
+			pinNormal = -hit.normal.normalized;
 			pinAngle = Mathf.Atan2(-hit.normal.y, -hit.normal.x) * Mathf.Rad2Deg;
 			pinPos = hit.collider.ClosestPoint(hit.point);
 		}
+		else
+		{
+			Debug.LogWarning("NOT HIT");
+			pinNormal = _intoWallDir.normalized;
+			pinAngle = Mathf.Atan2(_intoWallDir.y, _intoWallDir.x) * Mathf.Rad2Deg;
+			pinPos = _contactPos;
+		}
 		
-		GameObject pinObj = Instantiate(pinPrefab, pinPos, Quaternion.Euler(0f, 0f, pinAngle + 90f));
+		GameObject pinObj = Instantiate(pinPrefab, pinPos + pinNormal * 0.05f, Quaternion.Euler(0f, 0f, pinAngle + 90f));
+		pinObj.transform.SetParent(_wall);
 		stickEvent?.Invoke(pinObj.GetComponent<WrappedThreadPin>());
 	}
 
@@ -164,7 +170,8 @@ public class Needle : MonoBehaviour
 		if (stuckWallCollider != null && stuckNeedleCollider != null)
 			Physics2D.IgnoreCollision(stuckNeedleCollider, stuckWallCollider, true);
 
-		transform.position += (Vector3)(stuckWallNormal * 0.1f);
+		transform.position += (Vector3)(stuckWallNormal.normalized * 0.2f);
+		Physics2D.SyncTransforms();
 
 		rb.bodyType = RigidbodyType2D.Dynamic;
 		rb.linearVelocity = launchDirection.normalized * power;
