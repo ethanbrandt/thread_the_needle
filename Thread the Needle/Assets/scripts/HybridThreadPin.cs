@@ -398,11 +398,11 @@ public class HybridThreadPin : MonoBehaviour
 			return true;
 		}
 
-		if (foundPartialCandidate)
+		/*if (foundPartialCandidate)
 		{
 			wrapPoint = new WrapPoint(bestPartialPoint, hit.collider);
 			return true;
-		}
+		}*/
 
 		return false;
 	}

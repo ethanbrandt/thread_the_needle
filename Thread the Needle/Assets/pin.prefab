@@ -9,9 +9,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 457823621017761369}
-  - component: {fileID: -4619040527845762989}
   - component: {fileID: 2574268135416973029}
-  - component: {fileID: 4218575483927880763}
   - component: {fileID: 6304951812291314080}
   - component: {fileID: 7817740137983818641}
   - component: {fileID: 6467057950519784786}
@@ -37,35 +35,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &-4619040527845762989
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5410682845605193993}
-  m_Enabled: 0
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 675e1b1b05b4478796d3db0e2901618f, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::HybridThreadPin
-  pinTarget: {fileID: 0}
-  needleEyeYOffest: 0.75
-  wallLayer:
-    serializedVersion: 2
-    m_Bits: 192
-  maxWrapPoints: 16
-  wrapPointPadding: 0.06
-  linecastEndpointPadding: 0.025
-  visualPointSpacing: 0.09
-  constraintIterations: 5
-  damping: 0.9
-  gravity: {x: 0, y: -3}
-  baseReturnStrength: 3
-  invalidReturnStrength: 45
-  maxVisualOffset: 0.55
-  lineCornerVertices: 8
-  pinned: 0
 --- !u!120 &2574268135416973029
 LineRenderer:
   serializedVersion: 3
@@ -175,38 +144,6 @@ LineRenderer:
   m_UseWorldSpace: 1
   m_Loop: 0
   m_ApplyActiveColorSpace: 1
---- !u!114 &4218575483927880763
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5410682845605193993}
-  m_Enabled: 0
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: e0170d150c7fa7948ab996ff34fb6dd0, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RopeVerlet
-  pinTarget: {fileID: 0}
-  needleEyeYOffest: 0.75
-  numOfRopeSegments: 5
-  ropeSegmentLength: 0.2
-  addSegmentDistanceMultiplier: 1
-  maxRopeSegments: 200
-  gravityForce: {x: 0, y: -0.25}
-  dampingFactor: 0.98
-  collisionMask:
-    serializedVersion: 2
-    m_Bits: 192
-  collisionRadius: 0.1
-  bounceFactor: 0.1
-  numOfConstraintRunsNeedle: 30
-  numOfConstraintRunsPinned: 15
-  collisionSegmentIntervalNeedle: 1
-  collisionSegmentIntervalPinned: 1
-  pinned: 0
-  needleFollowSegments: 0
-  needleFollowStrength: 0.7
 --- !u!212 &6304951812291314080
 SpriteRenderer:
   serializedVersion: 2
@@ -289,20 +226,36 @@ MonoBehaviour:
   wallLayer:
     serializedVersion: 2
     m_Bits: 192
-  maxWrapPoints: 16
-  wrapPointPadding: 0.05
+  maxWrapPoints: 32
+  maxWrapPointsPerCollider: 3
+  wrapPointPadding: 0.08
   linecastEndpointPadding: 0.03
+  anchorColliderPadding: 0.025
+  releaseCornerGrazingPadding: 0.1
+  candidateRadius: 0.12
+  compositeCandidateRadius: 0.15
+  wrapPushDotThreshold: 0.01
+  passiveStraightenClearFrames: 10
+  pinnedPassiveStraightenClearFrames: 10
+  movingColliderBridgeClearFrames: 6
   needleEyeYOffset: 0.75
-  visualSegmentLength: 0.15
+  visualSegmentLength: 0.25
   useSag: 1
-  sagPerUnit: 0.06
-  maxSag: 0.35
-  sagSmoothTime: 0.12
+  sagPerUnit: 0.03
+  maxSag: 0.3
+  wrappedSagMultiplier: 0.15
+  sagSmoothTime: 0.3
   lineCornerVertices: 12
-  needleArcSamples: 0
-  needleArcStrength: 0
-  needleArcReturnSpeed: 0
-  maxNeedleArcOffset: 0
+  debugOverlay: 0
+  debugOnlyWhenSelected: 0
+  debugPointRadius: 0.06
+  debugControlSpanColor: {r: 0, g: 1, b: 1, a: 1}
+  debugWrapPointColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+  debugCandidateColor: {r: 1, g: 0, b: 1, a: 1}
+  debugRejectedCandidateColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
+  debugBlockingHitColor: {r: 1, g: 0, b: 0, a: 1}
+  debugInsertedWrapColor: {r: 0, g: 1, b: 0, a: 1}
+  debugReleasedWrapColor: {r: 0, g: 0, b: 1, a: 1}
   pinned: 0
 --- !u!114 &6467057950519784786
 MonoBehaviour:
@@ -440,3 +393,8 @@ MonoBehaviour:
       m_ColorSpace: -1
       m_NumColorKeys: 2
       m_NumAlphaKeys: 2
+  sampleDistances:
+  - 0.05
+  - 0.15
+  - 0.35
+  - 0.5

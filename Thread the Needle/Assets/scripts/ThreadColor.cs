@@ -6,7 +6,9 @@ using UnityEngine.Tilemaps;
 public class ThreadColor : MonoBehaviour
 {
 	[SerializeField] Gradient defaultGradient;
-	[SerializeField] List<TileGradient> tileGradients;	
+	[SerializeField] List<TileGradient> tileGradients;
+	
+	[SerializeField] float[] sampleDistances = { 0.05f, 0.15f, 0.35f, 0.5f };
 	
 	[Serializable]
 	public struct TileGradient
@@ -19,24 +21,39 @@ public class ThreadColor : MonoBehaviour
 	{
 		Tilemap tilemap = FindFirstObjectByType<Tilemap>();
 		var lineRenderer = GetComponent<LineRenderer>();
-		
-		Vector3Int gridPos = new Vector3Int((int)Mathf.Round(-transform.up.x + transform.position.x), (int)Mathf.Round(-transform.up.y + transform.position.y), 0);
-		Vector3Int gridPosFallback = new Vector3Int((int)Mathf.Round(transform.position.x), (int)Mathf.Round(transform.position.y), 0);
-		string connectedTileName = "";
-		if (tilemap.GetTile(gridPos))
-			connectedTileName = tilemap.GetTile(gridPos).name;
-		else if (tilemap.GetTile(gridPosFallback))
-			connectedTileName = tilemap.GetTile(gridPosFallback).name;
-			
-		foreach (var tileGradient in tileGradients)
+
+		TileBase connectedTile = FindConnectedTile(tilemap);
+
+		if (connectedTile != null)
 		{
-			if (tileGradient.tileName == connectedTileName)
+			foreach (var tileGradient in tileGradients)
 			{
-				lineRenderer.colorGradient = tileGradient.gradient;
-				return;
+				if (tileGradient.tileName == connectedTile.name)
+				{
+					lineRenderer.colorGradient = tileGradient.gradient;
+					return;
+				}
 			}
 		}
-
+		
 		lineRenderer.colorGradient = defaultGradient;
+	}
+	
+	TileBase FindConnectedTile(Tilemap _tilemap)
+	{
+		Vector3 inwardDirection = -transform.up;
+
+		foreach (float distance in sampleDistances)
+		{
+			Vector3 sampleWorldPos = transform.position + inwardDirection * distance;
+			Vector3Int cell = _tilemap.WorldToCell(sampleWorldPos);
+
+			TileBase tile = _tilemap.GetTile(cell);
+
+			if (tile != null)
+				return tile;
+		}
+
+		return null;
 	}
 }
