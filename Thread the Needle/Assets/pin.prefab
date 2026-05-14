@@ -235,8 +235,8 @@ MonoBehaviour:
   candidateRadius: 0.12
   compositeCandidateRadius: 0.15
   wrapPushDotThreshold: 0.01
-  passiveStraightenClearFrames: 5
-  pinnedPassiveStraightenClearFrames: 5
+  passiveStraightenClearFrames: 10
+  pinnedPassiveStraightenClearFrames: 10
   needleEyeYOffset: 0.75
   visualSegmentLength: 0.15
   useSag: 1

@@ -94,6 +94,8 @@ public class WrappedThreadPin : MonoBehaviour
 	[SerializeField] Color debugReleasedWrapColor = Color.blue;
 
 	private const int MaxWrapSolveIterations = 8;
+	private const int SagClampSearchIterations = 6;
+	private const float SagClampEpsilon = 0.0005f;
 
 	public static Action<bool> CutEvent;
 	
@@ -409,8 +411,16 @@ public class WrappedThreadPin : MonoBehaviour
 			if (!CanStoreWrapPoint(hit.collider))
 				return false;
 
-			if (TryCreateWrapPoint(hit, from, to, fromCollider, toCollider, out WrapPoint wrapPoint) ||
-				TryCreateFallbackWrapPoint(hit, from, to, fromCollider, toCollider, out wrapPoint) || TryCreateSurfaceContactWrapPoint(hit, from, to, fromCollider, out wrapPoint))
+			if (TryCreateWrapPoint(hit, from, to, fromCollider, toCollider, out WrapPoint wrapPoint))
+			{
+				StoreWrapPoint(i, wrapPoint);
+				return true;
+			}
+
+			bool blockedByEndpointCollider = hit.collider == fromCollider || hit.collider == toCollider;
+			if (!blockedByEndpointCollider &&
+				(TryCreateFallbackWrapPoint(hit, from, to, fromCollider, toCollider, out wrapPoint) ||
+				TryCreateSurfaceContactWrapPoint(hit, from, to, fromCollider, out wrapPoint)))
 			{
 				StoreWrapPoint(i, wrapPoint);
 				return true;
@@ -450,7 +460,7 @@ public class WrappedThreadPin : MonoBehaviour
 		for (int i = wrapPoints.Count - 1; i >= 0; i--)
 		{
 			if (!wrapPoints[i].IsValid)
-				wrapPoints.RemoveAt(i);
+				RemoveWrapPointAt(i);
 		}
 
 		UpdateColliderMotionTracking();
@@ -473,7 +483,7 @@ public class WrappedThreadPin : MonoBehaviour
 				continue;
 
 			RecordDebugPoint(debugReleasedWrapPoints, wrapPoints[i].Position);
-			wrapPoints.RemoveAt(i);
+			RemoveWrapPointAt(i);
 			releasedWrapPointThisFrame = true;
 			return;
 		}
@@ -483,7 +493,7 @@ public class WrappedThreadPin : MonoBehaviour
 	{
 		int wrapPointLimit = MaxAllowedWrapPoints;
 		while (wrapPoints.Count > wrapPointLimit)
-			wrapPoints.RemoveAt(wrapPoints.Count - 1);
+			RemoveWrapPointAt(wrapPoints.Count - 1);
 	}
 
 	private void UpdateColliderMotionTracking()
@@ -653,10 +663,22 @@ public class WrappedThreadPin : MonoBehaviour
 
 	private void StoreWrapPoint(int insertIndex, WrapPoint wrapPoint)
 	{
-		wrapPoints.Insert(Mathf.Clamp(insertIndex, 0, wrapPoints.Count), wrapPoint);
+		int clampedInsertIndex = Mathf.Clamp(insertIndex, 0, wrapPoints.Count);
+		wrapPoints.Insert(clampedInsertIndex, wrapPoint);
+		InsertSagStateAtSpan(clampedInsertIndex);
 		RecordDebugPoint(debugInsertedWrapPoints, wrapPoint.Position);
 		if (wrapPoint.collider != null && !previousColliderCenters.ContainsKey(wrapPoint.collider))
 			previousColliderCenters[wrapPoint.collider] = wrapPoint.collider.bounds.center;
+	}
+
+	private void RemoveWrapPointAt(int index)
+	{
+		if (index < 0 || index >= wrapPoints.Count)
+			return;
+
+		MergeSagStateAroundRemovedWrap(index);
+		wrapPoints.RemoveAt(index);
+		EnsureSagState(wrapPoints.Count + 1);
 	}
 
 	private void BuildControlPoints(Vector2 startAnchor, Vector2 endAnchor)
@@ -1323,6 +1345,8 @@ public class WrappedThreadPin : MonoBehaviour
 
 	private void EnsureSagState(int spanCount)
 	{
+		spanCount = Mathf.Max(0, spanCount);
+
 		while (currentSpanSags.Count < spanCount)
 		{
 			currentSpanSags.Add(0f);
@@ -1337,6 +1361,33 @@ public class WrappedThreadPin : MonoBehaviour
 		}
 	}
 
+	private void InsertSagStateAtSpan(int splitSpanIndex)
+	{
+		if (currentSpanSags.Count == 0)
+			return;
+
+		int sourceIndex = Mathf.Clamp(splitSpanIndex, 0, currentSpanSags.Count - 1);
+		int insertIndex = Mathf.Clamp(sourceIndex + 1, 0, currentSpanSags.Count);
+
+		currentSpanSags.Insert(insertIndex, currentSpanSags[sourceIndex]);
+		spanSagVelocities.Insert(insertIndex, spanSagVelocities[sourceIndex]);
+	}
+
+	private void MergeSagStateAroundRemovedWrap(int removedWrapIndex)
+	{
+		int leftSpanIndex = removedWrapIndex;
+		int rightSpanIndex = removedWrapIndex + 1;
+
+		if (leftSpanIndex < 0 || rightSpanIndex >= currentSpanSags.Count)
+			return;
+
+		currentSpanSags[leftSpanIndex] = (currentSpanSags[leftSpanIndex] + currentSpanSags[rightSpanIndex]) * 0.5f;
+		spanSagVelocities[leftSpanIndex] = (spanSagVelocities[leftSpanIndex] + spanSagVelocities[rightSpanIndex]) * 0.5f;
+
+		currentSpanSags.RemoveAt(rightSpanIndex);
+		spanSagVelocities.RemoveAt(rightSpanIndex);
+	}
+
 	private void AddRenderSpan(Vector2 from, Vector2 to, bool includeStart, int spanIndex)
 	{
 		float distance = Vector2.Distance(from, to);
@@ -1347,20 +1398,26 @@ public class WrappedThreadPin : MonoBehaviour
 		if (includeStart)
 			renderPositions.Add(from);
 
-		if (useSag && TryBuildSpan(from, to, sampleCount, spanIndex, sagAmount, canUseNeedleArc))
+		if (useSag)
 		{
-			for (int i = 0; i < spanSamples.Count; i++)
-				AddRenderPosition(spanSamples[i], spanIndex);
+			float validSagAmount = GetLargestValidSag(from, to, sampleCount, spanIndex, sagAmount, false);
+			ClampStoredSag(spanIndex, sagAmount, validSagAmount);
 
-			return;
-		}
+			if (canUseNeedleArc && TryBuildSpan(from, to, sampleCount, spanIndex, validSagAmount, true))
+			{
+				for (int i = 0; i < spanSamples.Count; i++)
+					AddRenderPosition(spanSamples[i], spanIndex);
 
-		if (useSag && canUseNeedleArc && TryBuildSpan(from, to, sampleCount, spanIndex, sagAmount, false))
-		{
-			for (int i = 0; i < spanSamples.Count; i++)
-				AddRenderPosition(spanSamples[i], spanIndex);
+				return;
+			}
 
-			return;
+			if (TryBuildSpan(from, to, sampleCount, spanIndex, validSagAmount, false))
+			{
+				for (int i = 0; i < spanSamples.Count; i++)
+					AddRenderPosition(spanSamples[i], spanIndex);
+
+				return;
+			}
 		}
 
 		if (!useSag && canUseNeedleArc && TryBuildSpan(from, to, sampleCount, spanIndex, 0f, true))
@@ -1372,6 +1429,50 @@ public class WrappedThreadPin : MonoBehaviour
 		}
 
 		AddStraightSpan(from, to, sampleCount, spanIndex);
+	}
+
+	private float GetLargestValidSag(
+		Vector2 from,
+		Vector2 to,
+		int sampleCount,
+		int spanIndex,
+		float requestedSag,
+		bool applyNeedleArc)
+	{
+		requestedSag = Mathf.Max(0f, requestedSag);
+		if (requestedSag <= SagClampEpsilon)
+			return 0f;
+
+		if (TryBuildSpan(from, to, sampleCount, spanIndex, requestedSag, applyNeedleArc))
+			return requestedSag;
+
+		if (!TryBuildSpan(from, to, sampleCount, spanIndex, 0f, applyNeedleArc))
+			return 0f;
+
+		float low = 0f;
+		float high = requestedSag;
+		for (int i = 0; i < SagClampSearchIterations; i++)
+		{
+			float mid = (low + high) * 0.5f;
+			if (TryBuildSpan(from, to, sampleCount, spanIndex, mid, applyNeedleArc))
+				low = mid;
+			else
+				high = mid;
+		}
+
+		return low;
+	}
+
+	private void ClampStoredSag(int spanIndex, float requestedSag, float validSag)
+	{
+		if (requestedSag - validSag <= SagClampEpsilon ||
+			spanIndex < 0 ||
+			spanIndex >= currentSpanSags.Count ||
+			spanIndex >= spanSagVelocities.Count)
+			return;
+
+		currentSpanSags[spanIndex] = validSag;
+		spanSagVelocities[spanIndex] = 0f;
 	}
 
 	private void AddRenderPosition(Vector2 position, int insertIndex)
