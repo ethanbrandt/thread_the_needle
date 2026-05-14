@@ -239,7 +239,7 @@ MonoBehaviour:
   pinnedPassiveStraightenClearFrames: 10
   movingColliderBridgeClearFrames: 6
   needleEyeYOffset: 0.75
-  visualSegmentLength: 0.15
+  visualSegmentLength: 0.25
   useSag: 1
   sagPerUnit: 0.03
   maxSag: 0.3
