@@ -214,12 +214,10 @@ public class WrappedThreadPin : MonoBehaviour
 
 	private bool TryCutFromHazard()
 	{
-		BuildControlPoints(GetStartAnchor(), transform.position);
-
-		for (int i = 0; i < controlPoints.Count - 1; i++)
+		for (int i = 0; i < renderPositions.Count - 1; i++)
 		{
-			Vector2 from = controlPoints[i];
-			Vector2 to = controlPoints[i + 1];
+			Vector2 from = renderPositions[i];
+			Vector2 to = renderPositions[i + 1];
 
 			int hitCount = Physics2D.Linecast(from, to, hazardFilter, hazardHits);
 			if (hitCount <= 0)
@@ -232,7 +230,7 @@ public class WrappedThreadPin : MonoBehaviour
 					hit = hazardHits[hitIndex];
 			}
 
-			CutAtControlSegment(i, hit.point);
+			CutAtRenderSegment(i, hit.point);
 			return true;
 		}
 
@@ -244,10 +242,10 @@ public class WrappedThreadPin : MonoBehaviour
 		return ((1 << collider.gameObject.layer) & layerMask.value) != 0;
 	}
 
-	private void CutAtControlSegment(int segmentIndex, Vector2 cutPoint)
+	private void CutAtRenderSegment(int segmentIndex, Vector2 cutPoint)
 	{
-		Vector2 segmentStart = controlPoints[segmentIndex];
-		Vector2 segmentEnd = controlPoints[segmentIndex + 1];
+		Vector2 segmentStart = renderPositions[segmentIndex];
+		Vector2 segmentEnd = renderPositions[segmentIndex + 1];
 		Vector2 tangent = segmentEnd - segmentStart;
 		if (tangent.sqrMagnitude < 0.0001f)
 			tangent = Vector2.right;
@@ -257,13 +255,13 @@ public class WrappedThreadPin : MonoBehaviour
 
 		startPiece = new CutPiece(true, false);
 		for (int i = 0; i <= segmentIndex; i++)
-			startPiece.Add(controlPoints[i]);
+			startPiece.Add(renderPositions[i]);
 		startPiece.Add(cutPoint + normal * cutEndOffset);
 
 		endPiece = new CutPiece(false, true);
 		endPiece.Add(cutPoint - normal * cutEndOffset);
-		for (int i = segmentIndex + 1; i < controlPoints.Count; i++)
-			endPiece.Add(controlPoints[i]);
+		for (int i = segmentIndex + 1; i < renderPositions.Count; i++)
+			endPiece.Add(renderPositions[i]);
 
 		startPiece.KickEnd(normal * cutSeparationImpulse);
 		endPiece.KickStart(-normal * cutSeparationImpulse);
