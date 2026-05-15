@@ -1,59 +1,36 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Tilemaps;
 
 public class ThreadColor : MonoBehaviour
 {
-	[SerializeField] Gradient defaultGradient;
-	[SerializeField] List<TileGradient> tileGradients;
-	
-	[SerializeField] float[] sampleDistances = { 0.05f, 0.15f, 0.35f, 0.5f };
+	[SerializeField] ThreadColorEnum threadColor;
+
+	public string GetColorString()
+	{
+		switch (threadColor)
+		{
+			case ThreadColorEnum.RED:
+				return "red_tile";
+			case ThreadColorEnum.PURPLE:
+				return "purple_tile";
+			case ThreadColorEnum.GREEN:
+				return "green_tile";
+			case ThreadColorEnum.YELLOW:
+				return "yellow_tile";
+			case ThreadColorEnum.BLUE:
+				return "blue_tile";
+		}
+
+		return "";
+	}
 	
 	[Serializable]
-	public struct TileGradient
+	public enum ThreadColorEnum
 	{
-		public string tileName;
-		public Gradient gradient;
-	}
-	
-	void Start()
-	{
-		Tilemap tilemap = FindFirstObjectByType<Tilemap>();
-		var lineRenderer = GetComponent<LineRenderer>();
-
-		TileBase connectedTile = FindConnectedTile(tilemap);
-
-		if (connectedTile != null)
-		{
-			foreach (var tileGradient in tileGradients)
-			{
-				if (tileGradient.tileName == connectedTile.name)
-				{
-					lineRenderer.colorGradient = tileGradient.gradient;
-					return;
-				}
-			}
-		}
-		
-		lineRenderer.colorGradient = defaultGradient;
-	}
-	
-	TileBase FindConnectedTile(Tilemap _tilemap)
-	{
-		Vector3 inwardDirection = -transform.up;
-
-		foreach (float distance in sampleDistances)
-		{
-			Vector3 sampleWorldPos = transform.position + inwardDirection * distance;
-			Vector3Int cell = _tilemap.WorldToCell(sampleWorldPos);
-
-			TileBase tile = _tilemap.GetTile(cell);
-
-			if (tile != null)
-				return tile;
-		}
-
-		return null;
+		RED,
+		PURPLE,
+		GREEN,
+		YELLOW,
+		BLUE
 	}
 }

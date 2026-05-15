@@ -393,8 +393,10 @@ MonoBehaviour:
       m_ColorSpace: -1
       m_NumColorKeys: 2
       m_NumAlphaKeys: 2
+  wallLayerMask:
+    serializedVersion: 2
+    m_Bits: 192
   sampleDistances:
-  - 0.05
-  - 0.15
-  - 0.35
+  - 0.25
+  - 0.375
   - 0.5

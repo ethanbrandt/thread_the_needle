@@ -1,11 +1,5 @@
 using UnityEngine;
 using System;
-using System.Collections;
-using System.Numerics;
-using Unity.Mathematics;
-using Quaternion = UnityEngine.Quaternion;
-using Vector2 = UnityEngine.Vector2;
-using Vector3 = UnityEngine.Vector3;
 
 public class Needle : MonoBehaviour
 {
@@ -16,6 +10,7 @@ public class Needle : MonoBehaviour
 	[SerializeField] float tipLocalY = -0.92f;
 	[SerializeField] float tipHitTolerance = 0.15f;
 	[SerializeField] LayerMask wallLayer;
+	[SerializeField] LayerMask cushionLayer;
 	
 	[SerializeField] float disableTime = 0.05f;
 
@@ -23,6 +18,7 @@ public class Needle : MonoBehaviour
 	
 	public Action<WrappedThreadPin> stickEvent;
 	public Action failStateEvent;
+	public Action winStateEvent;
 	
 	private Vector2 currentVelocity;
 
@@ -112,7 +108,7 @@ public class Needle : MonoBehaviour
 				stuckContactPoint = contact.point;
 				stuckWallNormal = contact.normal;
 				
-				StickIntoWall(intoWallDir, contact.collider.ClosestPoint(contact.point), col.transform);
+				StickIntoSurface(intoWallDir, contact.collider.ClosestPoint(contact.point), col.transform, wallLayer);
 				hasHit = false;
 				return;
 			}
@@ -122,7 +118,7 @@ public class Needle : MonoBehaviour
 			failStateEvent?.Invoke();
 	}
 
-	private void StickIntoWall(Vector2 _intoWallDir, Vector2 _contactPos, Transform _wall)
+	private void StickIntoSurface(Vector2 _intoWallDir, Vector2 _contactPos, Transform _surface, LayerMask _surfaceLayer)
 	{
 		rb.linearVelocity = Vector2.zero;
 		rb.angularVelocity = 0f;
@@ -139,13 +135,13 @@ public class Needle : MonoBehaviour
 
 		transform.position = targetTipPos - tipOffset;
 		
-		transform.SetParent(_wall);
-		RaycastHit2D hit = Physics2D.Raycast(transform.position + transform.up, -transform.up, 3f, wallLayer, 0, Mathf.Infinity);
+		transform.SetParent(_surface);
+		RaycastHit2D hit = Physics2D.Raycast(transform.position + transform.up, -transform.up, 3f, _surfaceLayer, 0, Mathf.Infinity);
 
 		float pinAngle;
 		Vector2 pinPos;
 		Vector2 pinNormal;
-		if (hit && hit.transform == _wall)
+		if (hit && hit.transform == _surface)
 		{
 			pinNormal = -hit.normal.normalized;
 			pinAngle = Mathf.Atan2(-hit.normal.y, -hit.normal.x) * Mathf.Rad2Deg;
@@ -160,7 +156,7 @@ public class Needle : MonoBehaviour
 		}
 		
 		GameObject pinObj = Instantiate(pinPrefab, pinPos + pinNormal.normalized * -0.025f, Quaternion.Euler(0f, 0f, pinAngle + 90f));
-		pinObj.transform.SetParent(_wall);
+		pinObj.transform.SetParent(_surface);
 		stickEvent?.Invoke(pinObj.GetComponent<WrappedThreadPin>());
 	}
 
@@ -181,5 +177,32 @@ public class Needle : MonoBehaviour
 		rb.linearVelocity = launchDirection.normalized * power;
 
 		disableTimer = 0f;
+	}
+
+	private void OnTriggerEnter2D(Collider2D other)
+	{
+		if (hasHit)
+			return;
+		
+		if ((1 << other.gameObject.layer & cushionLayer) == 0)
+			return;
+
+		Vector2 impactVelocity = rb.linearVelocity.sqrMagnitude > 0.001f ? rb.linearVelocity : currentVelocity;
+		if (impactVelocity.magnitude < minSpeedForStick)
+			return;
+
+		currentVelocity = impactVelocity;
+		Vector2 intoCushionDir = impactVelocity.normalized;
+		Vector2 tipPos = transform.TransformPoint(new Vector2(0f, tipLocalY));
+		RaycastHit2D hit = Physics2D.Raycast(tipPos - intoCushionDir * tipHitTolerance, intoCushionDir, maxStickDepth + tipHitTolerance, cushionLayer, 0, Mathf.Infinity);
+		Vector2 contactPos = hit && hit.collider == other ? hit.point : other.ClosestPoint(tipPos);
+
+		stuckWallCollider = other;
+		stuckNeedleCollider = GetComponent<Collider2D>();
+		stuckContactPoint = contactPos;
+		stuckWallNormal = -intoCushionDir;
+
+		StickIntoSurface(intoCushionDir, contactPos, other.transform, cushionLayer);
+		winStateEvent?.Invoke();
 	}
 }
