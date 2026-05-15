@@ -9,16 +9,22 @@ public class Controller : MonoBehaviour
 	[Header("Fail State")]
 	[SerializeField] float timeBeforeRestart = 3f;
 	
+	[Header("Win State")]
+	[SerializeField] string nextSceneName;
+	[SerializeField] float timeBeforeNextSceneTransition = 3f;
+	
 	[Header("Assignment")]
 	[SerializeField] DirectionIndicator directionIndicator;
 	[SerializeField] PowerIndicator powerIndicator;
 	[SerializeField] Needle needle;
+	[SerializeField] CinemachineCamera cam;
 	
 	private float directionOffset;
 	private WrappedThreadPin currentPin;
 	private Vector2 currentWallNormal = Vector2.up;
 	private Vector2 currentContactPoint;
 	private float restartTimer = -1f;
+	private float winTransitionTimer = -1f;
 	
 	enum GameState
 	{
@@ -26,7 +32,8 @@ public class Controller : MonoBehaviour
 		DIRECTION_MINIGAME,
 		POWER_MINIGAME_START,
 		POWER_MINIGAME_HOLD,
-		MOVING
+		MOVING,
+		SCENE_TRANSITION
 	}
 
 	private GameState currentGameState = GameState.STUCK;
@@ -35,6 +42,7 @@ public class Controller : MonoBehaviour
 	{
 		needle.stickEvent += HandleStickEvent;
 		needle.failStateEvent += HandleFailStateEvent;
+		needle.winStateEvent += HandleWinStateEvent;
 	}
 
 	private void Update()
@@ -46,6 +54,15 @@ public class Controller : MonoBehaviour
 		{
 			restartTimer = -1f;
 			SceneManager.LoadScene(SceneManager.GetActiveScene().name, LoadSceneMode.Single);
+		}
+
+		if (winTransitionTimer >= 0f)
+			winTransitionTimer += Time.deltaTime;
+
+		if (winTransitionTimer >= timeBeforeNextSceneTransition)
+		{
+			winTransitionTimer = -1f;
+			SceneManager.LoadScene(nextSceneName, LoadSceneMode.Single);
 		}
 	}
 
@@ -66,11 +83,26 @@ public class Controller : MonoBehaviour
 
 	private void HandleFailStateEvent()
 	{
+		currentGameState = GameState.SCENE_TRANSITION;
 		restartTimer = 0f;
+		cam.Follow = null;
+		powerIndicator.ForceStop();
+		directionIndicator.ForceStop();
+	}
+
+	private void HandleWinStateEvent()
+	{
+		currentGameState = GameState.SCENE_TRANSITION;
+		winTransitionTimer = 0f;
+		powerIndicator.ForceStop();
+		directionIndicator.ForceStop();
 	}
 	
 	private void OnJump(InputValue _value)
 	{
+		if (currentGameState == GameState.SCENE_TRANSITION)
+			return;
+		
 		if (_value.isPressed)
 		{
 			switch (currentGameState)

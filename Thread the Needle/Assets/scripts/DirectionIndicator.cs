@@ -39,11 +39,6 @@ public class DirectionIndicator : MonoBehaviour
 			movingLeft = true;
 	}
 
-	public void StartDirectionMinigame()
-	{
-		StartDirectionMinigame(transform.position, transform.up);
-	}
-
 	public void StartDirectionMinigame(Vector2 contactPoint, Vector2 wallNormal)
 	{
 		inDirectionMinigame = true;
@@ -70,5 +65,12 @@ public class DirectionIndicator : MonoBehaviour
 	private float GetUpAlignedZRotation(Vector2 direction)
 	{
 		return Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg - 90f;
+	}
+
+	public void ForceStop()
+	{
+		inDirectionMinigame = false;
+        indicatorImage.enabled = false;
+        arrowImage.enabled = false;
 	}
 }

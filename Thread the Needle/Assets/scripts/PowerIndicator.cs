@@ -63,4 +63,11 @@ public class PowerIndicator : MonoBehaviour
 		SetEnabled(false);
 		return Mathf.Lerp(minPower, maxPower, slider.value);
 	}
+	
+	
+	public void ForceStop()
+	{
+		inPowerMinigame = false;
+		SetEnabled(false);
+	}
 }

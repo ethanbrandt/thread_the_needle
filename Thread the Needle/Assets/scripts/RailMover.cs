@@ -75,8 +75,6 @@ public class RailMover : MonoBehaviour
 					forwardList = false;
 			}
 			
-			print("currentPoint: " + currentPoint);
-			
 			if (railPoints[currentPoint].waitAtPointTime > 0f)
 				waitTimer = 0f;
 		}

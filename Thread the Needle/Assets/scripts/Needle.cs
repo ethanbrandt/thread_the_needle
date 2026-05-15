@@ -3,6 +3,7 @@ using System;
 
 public class Needle : MonoBehaviour
 {
+	[Header("Sticking")]
 	[SerializeField] float minStickDepth;
 	[SerializeField] float maxStickDepth;
 	[SerializeField] float speedForMaxStick;
@@ -12,8 +13,16 @@ public class Needle : MonoBehaviour
 	[SerializeField] LayerMask wallLayer;
 	[SerializeField] LayerMask cushionLayer;
 	
+	[Header("Launching")]
 	[SerializeField] float disableTime = 0.05f;
+	[SerializeField] float collisionClearance = 0.02f;
+	[SerializeField] float collisionReenableTimeout = 0.25f;
 
+	[Header("Stuck Collision Checking")]	
+	[SerializeField] float eyeYOffset = 0.75f;
+	[SerializeField] int numberOfFixedFramesBeforeUnstick = 5;
+	
+	[Header("Assignment")]
 	[SerializeField] GameObject pinPrefab;
 	
 	public Action<WrappedThreadPin> stickEvent;
@@ -30,6 +39,10 @@ public class Needle : MonoBehaviour
 	private Vector2 stuckWallNormal;
 	private bool hasHit;
 	private float disableTimer;
+	private bool ignoringPreviousSurface;
+	private float collisionIgnoreTimer;
+	private float lastStickDepth;
+	private int fixedFramesColliding;
 	
 	public Vector2 StuckContactPoint => stuckContactPoint;
 	public Vector2 StuckWallNormal => stuckWallNormal;
@@ -56,20 +69,41 @@ public class Needle : MonoBehaviour
 
 	private void FixedUpdate()
 	{
-		if (disableTimer >= 0f)
-			disableTimer += Time.fixedDeltaTime;
-		
-		if (disableTimer >= disableTime && stuckWallCollider != null && stuckNeedleCollider != null)
+		if (ignoringPreviousSurface && stuckWallCollider != null && stuckNeedleCollider != null)
 		{
-			disableTimer = -1f;
-        	Physics2D.IgnoreCollision(stuckNeedleCollider, stuckWallCollider, false);
+			collisionIgnoreTimer += Time.fixedDeltaTime;
+			ColliderDistance2D distance = stuckNeedleCollider.Distance(stuckWallCollider);
+
+			if (!distance.isOverlapped || distance.distance >= collisionClearance || collisionIgnoreTimer >= collisionReenableTimeout)
+			{
+				ignoringPreviousSurface = false;
+        		Physics2D.IgnoreCollision(stuckNeedleCollider, stuckWallCollider, false);
+			}
 		}
 		
 		currentVelocity = rb.linearVelocity;
 
-		if (hasHit || currentVelocity.sqrMagnitude < 0.001f)
+		if (hasHit)
 			return;
 
+		RaycastHit2D hit = Physics2D.Raycast(transform.position + transform.up * eyeYOffset, -transform.up, 0.05f, wallLayer);
+		if (hit && hit.transform)
+		{
+			print(hit.transform.name);
+			fixedFramesColliding++;
+			if (fixedFramesColliding >= numberOfFixedFramesBeforeUnstick)
+			{
+				Launch(transform.up.normalized, 1f);
+				hasHit = true;
+				failStateEvent?.Invoke();
+			}
+		}
+		else
+			fixedFramesColliding = 0;
+
+		if (currentVelocity.sqrMagnitude < 0.001f)
+			return;
+		
 		float angle = Mathf.Atan2(currentVelocity.y, currentVelocity.x) * Mathf.Rad2Deg;
 		rb.MoveRotation(angle + 90f);
 	}
@@ -95,7 +129,6 @@ public class Needle : MonoBehaviour
 			float tipIntoWallAmount = Vector2.Dot(tipDir.normalized, -contact.normal.normalized);
 			Debug.DrawRay(contact.point, -contact.normal, Color.cyan, 5f);
 			Debug.DrawRay(contact.point, tipDir, Color.red, 5f);
-			print(tipIntoWallAmount + " : " + contact.point);
 			if (currentVelocity.magnitude >= minSpeedForStick && (Vector2.Distance(contact.point, tipPos) <= tipHitTolerance || tipIntoWallAmount > 0.2f))
 			{
 				Vector2 wallNormal = contact.normal;
@@ -126,6 +159,7 @@ public class Needle : MonoBehaviour
 		rb.simulated = false;
 		
 		float stickDepth = Mathf.Lerp(minStickDepth, maxStickDepth, Mathf.Clamp01((currentVelocity.magnitude - minSpeedForStick) / (speedForMaxStick - minSpeedForStick)));
+		lastStickDepth = stickDepth;
 	
 		float angle = Mathf.Atan2(currentVelocity.y, currentVelocity.x) * Mathf.Rad2Deg;
 		transform.eulerAngles = new Vector3(0f, 0f, angle + 90f);
@@ -170,13 +204,15 @@ public class Needle : MonoBehaviour
 		if (stuckWallCollider != null && stuckNeedleCollider != null)
 			Physics2D.IgnoreCollision(stuckNeedleCollider, stuckWallCollider, true);
 
-		transform.position += (Vector3)(stuckWallNormal.normalized * 0.2f);
+		float launchOffset = Mathf.Max(0.2f, lastStickDepth + collisionClearance);
+		transform.position += (Vector3)(stuckWallNormal.normalized * launchOffset);
 		Physics2D.SyncTransforms();
 
 		rb.bodyType = RigidbodyType2D.Dynamic;
 		rb.linearVelocity = launchDirection.normalized * power;
 
-		disableTimer = 0f;
+		ignoringPreviousSurface = stuckWallCollider != null && stuckNeedleCollider != null;
+		collisionIgnoreTimer = 0f;
 	}
 
 	private void OnTriggerEnter2D(Collider2D other)

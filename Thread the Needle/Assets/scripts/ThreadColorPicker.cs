@@ -37,7 +37,6 @@ public class ThreadColorPicker : MonoBehaviour
 		}
 
 		string connectedThreadColor = FindConnectedThreadColor();
-		print("thread color: " + connectedThreadColor);
 		if (connectedThreadColor != "")
 		{
 			foreach (var tileGradient in tileGradients)
