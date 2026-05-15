@@ -215,6 +215,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 93a5858b4ee247caa1b86b0183c81f8c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::WrappedThreadPin
+  cutClip: {fileID: 8300000, guid: 3b41d54e9054e8d4e9462e036d20c650, type: 3}
   hazardLayer:
     serializedVersion: 2
     m_Bits: 512

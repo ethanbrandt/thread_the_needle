@@ -24,6 +24,10 @@ public class Needle : MonoBehaviour
 	
 	[Header("Assignment")]
 	[SerializeField] GameObject pinPrefab;
+
+	[Header("Audio")]
+	[SerializeField] AudioClip hitClip;
+	[SerializeField] AudioClip stickClip;
 	
 	public Action<WrappedThreadPin> stickEvent;
 	public Action failStateEvent;
@@ -95,6 +99,7 @@ public class Needle : MonoBehaviour
 			{
 				Launch(transform.up.normalized, 1f);
 				hasHit = true;
+				AudioSingleton.Instance.PlaySoundEffect(hitClip, transform.position);
 				failStateEvent?.Invoke();
 			}
 		}
@@ -146,9 +151,12 @@ public class Needle : MonoBehaviour
 				return;
 			}
 		}
-		
+
 		if (hasHit)
+		{
+			AudioSingleton.Instance.PlaySoundEffect(hitClip, transform.position);
 			failStateEvent?.Invoke();
+		}
 	}
 
 	private void StickIntoSurface(Vector2 _intoWallDir, Vector2 _contactPos, Transform _surface, LayerMask _surfaceLayer)
@@ -191,6 +199,7 @@ public class Needle : MonoBehaviour
 		
 		GameObject pinObj = Instantiate(pinPrefab, pinPos + pinNormal.normalized * -0.025f, Quaternion.Euler(0f, 0f, pinAngle + 90f));
 		pinObj.transform.SetParent(_surface);
+		AudioSingleton.Instance.PlaySoundEffect(stickClip, transform.position + transform.up * tipLocalY);
 		stickEvent?.Invoke(pinObj.GetComponent<WrappedThreadPin>());
 	}
 

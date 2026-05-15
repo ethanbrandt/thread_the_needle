@@ -43,6 +43,8 @@ public class Controller : MonoBehaviour
 		needle.stickEvent += HandleStickEvent;
 		needle.failStateEvent += HandleFailStateEvent;
 		needle.winStateEvent += HandleWinStateEvent;
+		
+		AudioSingleton.Instance.PlayLevelMusic();
 	}
 
 	private void Update()
@@ -96,6 +98,7 @@ public class Controller : MonoBehaviour
 		winTransitionTimer = 0f;
 		powerIndicator.ForceStop();
 		directionIndicator.ForceStop();
+		AudioSingleton.Instance.PlayWinJingle();
 	}
 	
 	private void OnJump(InputValue _value)

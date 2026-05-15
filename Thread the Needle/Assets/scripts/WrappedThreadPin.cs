@@ -6,6 +6,7 @@ using UnityEngine;
 public class WrappedThreadPin : MonoBehaviour
 {
 	[Header("Cutting")]
+	[SerializeField] AudioClip cutClip;
 	[Tooltip("Layers that cut the thread when the logical thread path crosses them.")]
 	[SerializeField] LayerMask hazardLayer;
 	[Tooltip("Gravity applied to the loose simulated pieces after the thread is cut.")]
@@ -269,6 +270,8 @@ public class WrappedThreadPin : MonoBehaviour
 		cut = true;
 		looseRenderer.enabled = true;
 		looseRenderer.colorGradient = lineRenderer.colorGradient;
+		
+		AudioSingleton.Instance.PlaySoundEffect(cutClip, cutPoint);	
 		
 		CutEvent?.Invoke(!pinned);
 	}
