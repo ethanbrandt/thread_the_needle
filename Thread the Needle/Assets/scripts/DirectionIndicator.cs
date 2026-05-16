@@ -46,12 +46,17 @@ public class DirectionIndicator : MonoBehaviour
 		arrowImage.enabled = true;
 		movingLeft = false;
 
+		UpdateAnchor(contactPoint, wallNormal);
+
+		arrow.transform.localEulerAngles = new Vector3(0f, 0f, minMaxZRot);
+	}
+
+	public void UpdateAnchor(Vector2 contactPoint, Vector2 wallNormal)
+	{
 		wallNormal = wallNormal.sqrMagnitude > 0.0001f ? wallNormal.normalized : Vector2.up;
 		Vector2 tangent = new Vector2(-wallNormal.y, wallNormal.x);
 		transform.position = contactPoint + wallNormal * wallNormalOffset + tangent * wallTangentOffset;
 		transform.eulerAngles = new Vector3(0f, 0f, GetUpAlignedZRotation(wallNormal));
-
-		arrow.transform.localEulerAngles = new Vector3(0f, 0f, minMaxZRot);
 	}
 	
 	public float EndDirectionMinigame()

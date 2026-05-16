@@ -41,6 +41,9 @@ public class Needle : MonoBehaviour
 	private Collider2D stuckNeedleCollider;
 	private Vector2 stuckContactPoint;
 	private Vector2 stuckWallNormal;
+	private Transform stuckSurface;
+	private Vector2 stuckLocalContactPoint;
+	private Vector2 stuckLocalWallNormal;
 	private bool hasHit;
 	private float disableTimer;
 	private bool ignoringPreviousSurface;
@@ -48,8 +51,21 @@ public class Needle : MonoBehaviour
 	private float lastStickDepth;
 	private int fixedFramesColliding;
 	
-	public Vector2 StuckContactPoint => stuckContactPoint;
-	public Vector2 StuckWallNormal => stuckWallNormal;
+	public Vector2 StuckContactPoint => stuckSurface != null ? stuckSurface.TransformPoint(stuckLocalContactPoint) : stuckContactPoint;
+	public Vector2 StuckWallNormal
+	{
+		get
+		{
+			if (stuckSurface != null)
+			{
+				Vector2 worldNormal = stuckSurface.TransformDirection(stuckLocalWallNormal);
+				if (worldNormal.sqrMagnitude > 0.0001f)
+					return worldNormal.normalized;
+			}
+
+			return stuckWallNormal;
+		}
+	}
 
 	private void Start()
 	{
@@ -161,6 +177,13 @@ public class Needle : MonoBehaviour
 
 	private void StickIntoSurface(Vector2 _intoWallDir, Vector2 _contactPos, Transform _surface, LayerMask _surfaceLayer)
 	{
+		Vector2 surfaceNormal = stuckWallNormal.sqrMagnitude > 0.0001f ? stuckWallNormal.normalized : -_intoWallDir.normalized;
+		stuckSurface = _surface;
+		stuckContactPoint = _contactPos;
+		stuckWallNormal = surfaceNormal;
+		stuckLocalContactPoint = _surface.InverseTransformPoint(_contactPos);
+		stuckLocalWallNormal = _surface.InverseTransformDirection(surfaceNormal).normalized;
+
 		rb.linearVelocity = Vector2.zero;
 		rb.angularVelocity = 0f;
 		rb.bodyType = RigidbodyType2D.Kinematic;
@@ -205,6 +228,11 @@ public class Needle : MonoBehaviour
 
 	public void Launch(Vector2 launchDirection, float power)
 	{
+		Vector2 launchNormal = StuckWallNormal;
+		stuckContactPoint = StuckContactPoint;
+		stuckWallNormal = launchNormal;
+		stuckSurface = null;
+
 		transform.SetParent(null);
 
 		hasHit = false;
@@ -214,7 +242,7 @@ public class Needle : MonoBehaviour
 			Physics2D.IgnoreCollision(stuckNeedleCollider, stuckWallCollider, true);
 
 		float launchOffset = Mathf.Max(0.2f, lastStickDepth + collisionClearance);
-		transform.position += (Vector3)(stuckWallNormal.normalized * launchOffset);
+		transform.position += (Vector3)(launchNormal.normalized * launchOffset);
 		Physics2D.SyncTransforms();
 
 		rb.bodyType = RigidbodyType2D.Dynamic;

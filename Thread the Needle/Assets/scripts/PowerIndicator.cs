@@ -51,6 +51,11 @@ public class PowerIndicator : MonoBehaviour
 		SetEnabled(true);
 		slider.value = 0f;
 
+		UpdateAnchor(contactPoint, wallNormal);
+	}
+
+	public void UpdateAnchor(Vector2 contactPoint, Vector2 wallNormal)
+	{
 		wallNormal = wallNormal.sqrMagnitude > 0.0001f ? wallNormal.normalized : Vector2.up;
 		Vector2 tangent = new Vector2(-wallNormal.y, wallNormal.x);
 		transform.position = contactPoint + wallNormal * wallNormalOffset + tangent * wallTangentOffset;

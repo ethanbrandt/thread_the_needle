@@ -67,6 +67,10 @@ public class Controller : MonoBehaviour
 			SceneManager.LoadScene(nextSceneName, LoadSceneMode.Single);
 		}
 	}
+	private void FixedUpdate()
+	{
+		UpdateMinigameAnchor();
+	}
 
 	private void HandleStickEvent(WrappedThreadPin _pin)
 	{
@@ -81,6 +85,25 @@ public class Controller : MonoBehaviour
 		
 		directionIndicator.StartDirectionMinigame(currentContactPoint, currentWallNormal);
 		currentGameState = GameState.DIRECTION_MINIGAME;
+	}
+
+	private void UpdateMinigameAnchor()
+	{
+		if (currentGameState != GameState.DIRECTION_MINIGAME && currentGameState != GameState.POWER_MINIGAME_START && currentGameState != GameState.POWER_MINIGAME_HOLD)
+			return;
+
+		currentWallNormal = needle.StuckWallNormal.sqrMagnitude > 0.0001f ? needle.StuckWallNormal.normalized : Vector2.up;
+		currentContactPoint = needle.StuckContactPoint;
+
+		switch (currentGameState)
+		{
+			case GameState.DIRECTION_MINIGAME:
+				directionIndicator.UpdateAnchor(currentContactPoint, currentWallNormal);
+				break;
+			case GameState.POWER_MINIGAME_HOLD:
+				powerIndicator.UpdateAnchor(currentContactPoint, currentWallNormal);
+				break;
+		}
 	}
 
 	private void HandleFailStateEvent()
@@ -108,6 +131,8 @@ public class Controller : MonoBehaviour
 		
 		if (_value.isPressed)
 		{
+			UpdateMinigameAnchor();
+
 			switch (currentGameState)
 			{
 				case GameState.DIRECTION_MINIGAME:
@@ -122,6 +147,8 @@ public class Controller : MonoBehaviour
 		}
 		else
 		{
+			UpdateMinigameAnchor();
+
 			switch (currentGameState)
 			{
 				case GameState.POWER_MINIGAME_HOLD:
