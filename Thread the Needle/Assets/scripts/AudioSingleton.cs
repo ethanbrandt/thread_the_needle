@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Audio;
 using UnityEngine.Serialization;
@@ -15,6 +16,10 @@ public class AudioSingleton : MonoBehaviour
 	[Header("Sound Effects")]
 	[SerializeField] AudioMixerGroup soundEffectMixerGroup;
 	[SerializeField, Range(0f, 1f)] float soundEffectVolume = 1f;
+	[SerializeField, Range(0f, 0.5f)] float soundEffectVolumeVariance = 0.1f;
+	[SerializeField, Range(0f, 0.5f)] float soundEffectPitchVariance = 0.05f;
+	[SerializeField] int soundEffectPoolPrewarmCount = 8;
+	[SerializeField] int maxSoundEffectPoolSize = 16;
 	[SerializeField] GameObject sfxObjectPrefab;
 	
 	public static AudioSingleton Instance { get; private set; }
@@ -27,6 +32,8 @@ public class AudioSingleton : MonoBehaviour
 	private bool menuMusicStarted;
 	private bool levelMusicStarted;
 	private bool winJingleStarted;
+	private readonly List<AudioSource> availableSoundEffects = new List<AudioSource>();
+	private readonly List<AudioSource> activeSoundEffects = new List<AudioSource>();
 	
 	void Awake()
 	{
@@ -40,6 +47,19 @@ public class AudioSingleton : MonoBehaviour
 		DontDestroyOnLoad(gameObject);
 		CacheMusicVolumes();
 		CacheStartedMusic();
+		PrewarmSoundEffectPool();
+	}
+
+	private void Update()
+	{
+		for (int i = activeSoundEffects.Count - 1; i >= 0; i--)
+		{
+			AudioSource soundEffectSource = activeSoundEffects[i];
+			if (soundEffectSource && soundEffectSource.isPlaying)
+				continue;
+
+			ReturnSoundEffectToPool(soundEffectSource, i);
+		}
 	}
 
 	public void PlayMenuMusic()
@@ -62,16 +82,94 @@ public class AudioSingleton : MonoBehaviour
 		if (!_soundEffect)
 			return;
 
-		GameObject soundEffectObject = Instantiate(sfxObjectPrefab, _position, Quaternion.identity);
-		DontDestroyOnLoad(soundEffectObject);
-
-		AudioSource soundEffectSource = soundEffectObject.GetComponent<AudioSource>();
+		AudioSource soundEffectSource = GetSoundEffectFromPool(_position);
+		if (!soundEffectSource)
+			return;
+		
 		soundEffectSource.clip = _soundEffect;
+		soundEffectSource.volume = GetVariedSoundEffectVolume();
+		soundEffectSource.pitch = GetVariedSoundEffectPitch();
 		soundEffectSource.Play();
+	}
 
-		float pitch = Mathf.Abs(soundEffectSource.pitch);
-		float destroyDelay = pitch > 0.001f ? _soundEffect.length / pitch : _soundEffect.length;
-		Destroy(soundEffectObject, destroyDelay + 3f);
+	private void PrewarmSoundEffectPool()
+	{
+		int count = Mathf.Max(0, soundEffectPoolPrewarmCount);
+		for (int i = 0; i < count; i++)
+			availableSoundEffects.Add(CreateSoundEffectSource(transform.position));
+	}
+
+	private AudioSource GetSoundEffectFromPool(Vector3 _position)
+	{
+		AudioSource soundEffectSource;
+		if (availableSoundEffects.Count > 0)
+		{
+			int lastIndex = availableSoundEffects.Count - 1;
+			soundEffectSource = availableSoundEffects[lastIndex];
+			availableSoundEffects.RemoveAt(lastIndex);
+		}
+		else if (activeSoundEffects.Count + availableSoundEffects.Count < Mathf.Max(1, maxSoundEffectPoolSize))
+			soundEffectSource = CreateSoundEffectSource(_position);
+		else
+		{
+			soundEffectSource = activeSoundEffects[0];
+			activeSoundEffects.RemoveAt(0);
+			soundEffectSource.Stop();
+		}
+
+		soundEffectSource.transform.position = _position;
+		soundEffectSource.gameObject.SetActive(true);
+		activeSoundEffects.Add(soundEffectSource);
+		return soundEffectSource;
+	}
+
+	private AudioSource CreateSoundEffectSource(Vector3 _position)
+	{
+		GameObject soundEffectObject = sfxObjectPrefab
+			? Instantiate(sfxObjectPrefab, _position, Quaternion.identity, transform)
+			: new GameObject("Pooled Sound Effect");
+
+		soundEffectObject.name = "Pooled Sound Effect";
+		soundEffectObject.transform.SetParent(transform, true);
+		AudioSource soundEffectSource = soundEffectObject.GetComponent<AudioSource>();
+		if (!soundEffectSource)
+			soundEffectSource = soundEffectObject.AddComponent<AudioSource>();
+
+		soundEffectSource.playOnAwake = false;
+		soundEffectSource.loop = false;
+		soundEffectSource.clip = null;
+		if (soundEffectMixerGroup)
+			soundEffectSource.outputAudioMixerGroup = soundEffectMixerGroup;
+		soundEffectSource.volume = soundEffectVolume;
+		soundEffectSource.pitch = 1f;
+		soundEffectObject.SetActive(false);
+		return soundEffectSource;
+	}
+
+	private void ReturnSoundEffectToPool(AudioSource _soundEffectSource, int _activeIndex)
+	{
+		activeSoundEffects.RemoveAt(_activeIndex);
+		if (!_soundEffectSource)
+			return;
+
+		_soundEffectSource.Stop();
+		_soundEffectSource.clip = null;
+		_soundEffectSource.volume = soundEffectVolume;
+		_soundEffectSource.pitch = 1f;
+		_soundEffectSource.gameObject.SetActive(false);
+		availableSoundEffects.Add(_soundEffectSource);
+	}
+
+	private float GetVariedSoundEffectVolume()
+	{
+		float variance = Mathf.Clamp01(soundEffectVolumeVariance);
+		return Mathf.Clamp01(soundEffectVolume * Random.Range(1f - variance, 1f + variance));
+	}
+
+	private float GetVariedSoundEffectPitch()
+	{
+		float variance = Mathf.Clamp(soundEffectPitchVariance, 0f, 0.95f);
+		return Random.Range(1f - variance, 1f + variance);
 	}
 
 	private void FadeToMusic(AudioSource _nextMusic)
